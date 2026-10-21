@@ -1,19 +1,24 @@
 {
-  "name": "discord-ab",
+  "name": "discord-music-bot",
   "version": "1.0.0",
   "private": true,
-  "description": "Defensive Discord anti-raid and anti-nuke security bot.",
+  "description": "A reliable Discord music bot with YouTube, Spotify and 24/7 voice support.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js",
-    "web": "node src/index.js"
+    "check": "node --check src/index.js && node --check src/commands.js && node --check src/music-utils.js && node --check src/health-page.js && node --check src/dashboard-page.js && node --check src/health-server.js",
+    "test": "node --test"
   },
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.12.0"
   },
   "dependencies": {
-    "discord.js": "^14.19.3",
-    "dotenv": "^16.6.1"
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.22.1",
+    "dotenv": "^16.6.1",
+    "ffmpeg-static": "^5.3.0",
+    "opusscript": "^0.0.8",
+    "play-dl": "^1.9.7",
+    "youtube-dl-exec": "^3.1.15"
   }
 }

@@ -1,8 +1,7 @@
 services:
   - type: web
-    name: ab-discord-security
+    name: discord-music-bot
     runtime: node
     plan: starter
-    buildCommand: npm install
+    buildCommand: YOUTUBE_DL_SKIP_PYTHON_CHECK=1 npm ci
     startCommand: npm start
-    healthCheckPath: /health

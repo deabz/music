@@ -1,79 +1,76 @@
-# ab
+# Music Bot
 
-A defensive Discord.js anti-raid and anti-nuke bot. It monitors join bursts and audit-log activity, automatically quarantines suspicious members, can lock down text channels, posts incident logs, and exposes every core action through slash commands.
+A Discord.js 14 music bot with YouTube playback, Spotify track/album/playlist support, queue controls, and an optional 24/7 server-deafened voice connection.
 
 ## Setup
 
-1. Install Node.js LTS (already installed by the setup assistant).
-2. Open `.env` and replace `PASTE_YOUR_BOT_TOKEN_HERE` with your bot token.
-3. In the Discord Developer Portal, enable **Server Members Intent**, **Message Content Intent**, and **Guild Members Intent**.
-4. Invite the bot with the `bot` and `applications.commands` scopes and permissions including View Audit Log, Manage Roles, Moderate Members, Manage Channels, Send Messages, Embed Links, and Manage Webhooks if you want webhook activity monitored.
-5. Run `npm install`, then `npm start`.
+1. Install Node.js 22.12 or newer.
+2. Copy `.env.example` to `.env` and set `DISCORD_TOKEN`.
+3. For Spotify support, create an app at <https://developer.spotify.com/dashboard> and set `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`.
+4. Invite the bot with the `bot` and `applications.commands` scopes. Grant View Channel, Connect, Speak, Send Messages, Embed Links, and Use Application Commands. In the Discord Developer Portal, enable the privileged **Message Content Intent** for apostrophe-prefix commands.
+5. Run `npm install`, then `npm start`. If the yt-dlp installer reports that Python is missing on Windows, run `$env:YOUTUBE_DL_SKIP_PYTHON_CHECK='1'; npm install; Remove-Item Env:YOUTUBE_DL_SKIP_PYTHON_CHECK` in PowerShell; the downloaded yt-dlp executable does not need Python to run.
 
-## Website and 24/7 hosting
+Set `GUILD_ID` while developing so slash commands register immediately. Leave it blank for global registration (Discord can take up to an hour to propagate global commands).
 
-ab includes a small status website and health endpoint. Open `http://localhost:3000/` locally, or use `/health` for a hosting monitor. Set `PORT` in `.env` if your host provides a port.
+## Website music controls
 
-For 24/7 uptime, deploy the project to an always-on Node host such as Render, Railway, Fly.io, or a VPS. `render.yaml` is included for Render. Set `DISCORD_TOKEN` and the rest of your environment variables as host secrets; never commit `.env`. On Render, use the `/health` health-check path and an always-on paid instance—free services may sleep and cannot guarantee continuous Discord monitoring.
+Open `/dashboard` on the bot website to control playback in any server the bot has joined. Set `MUSIC_DASHBOARD_TOKEN` to a long random secret on the bot host to enable access; generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. Enter the token on the dashboard to unlock it. It is held only in the current browser tab and sent over the protected API as a bearer token. Use HTTPS whenever the dashboard is reachable outside your machine.
 
-Slash commands are registered globally on startup, so Discord may take up to about an hour to propagate command changes. Run `/setup` once in each server as an Administrator. Setup creates the `ab-security` category, private `ab-logs` channel, and `ab Quarantine` role, applies quarantine denies to text channels, and saves the created IDs into `.env`. Keep `DRY_RUN=true` while testing if you want alerts without changing permissions or timing out users.
+The dashboard can pause/resume, skip or stop playback, seek within the current song, adjust volume/repeat mode, add a YouTube or Spotify song, reorder/remove/shuffle/clear the queue, and connect or disconnect voice. Adding a song requires selecting a voice channel; tracks retain the bot's six-minute duration limit. Public `/api/health` and `/healthz` remain read-only.
 
-The bot shows an **online Twitch streaming** presence named `Bearded Sexy Brown Boys` at `https://twitch.tv/a` by default. Change `PRESENCE_STATUS` to `online`, `idle`, `dnd`, or `invisible` if needed; `STREAMING_NAME` and `STREAMING_URL` customize the activity.
+## 24/7 voice
 
-Users listed in `OWNER_USER_IDS` are trusted by anti-nuke protection. Changes they make are still autosaved, but their audit-log actions do not trigger anti-nuke bans, quarantines, lockdowns, or cleanup responses.
+Set `VOICE_GUILD_ID` and `VOICE_CHANNEL_ID` plus `AUTO_JOIN_VOICE=true`. The bot joins on startup with `selfDeaf: true` and automatically handles normal Discord voice reconnects. A host that supports an always-on worker is required; sleeping web hosts cannot provide reliable 24/7 voice. The website at `/health` shows whether the bot is online and the active song; `/api/health` displays that same page in a browser and returns JSON to API clients. `/healthz` always returns JSON for monitoring.
+
+## Deploying on Railway
+
+1. Push this repository to GitHub and create a Railway project using **Deploy from GitHub repo**. Select the repository and the `main` branch.
+2. Set the build command to `YOUTUBE_DL_SKIP_PYTHON_CHECK=1 npm ci` and the start command to `npm start`. `railpack.json` installs Python 3 in the runtime image, which yt-dlp needs on Linux. Railway needs no public domain for this bot.
+3. Add a Railway Volume mounted at `/data`. Set `MUSIC_STATE_FILE=/data/music-state.json` so queue and playback recovery data survives redeploys.
+4. Add these Railway variables:
+
+   - `DISCORD_TOKEN`: a newly generated Discord bot token.
+   - `GUILD_ID`: your test server ID (optional, but recommended for immediate slash-command updates).
+   - `VOICE_GUILD_ID` and `VOICE_CHANNEL_ID`: the server and voice channel to auto-join.
+   - `AUTO_JOIN_VOICE=true`.
+   - `MUSIC_DASHBOARD_TOKEN`: a long random secret for protected website controls.
+   - `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`: optional, for Spotify links.
+   - `MAX_QUEUE_SIZE=2000` and `DEFAULT_VOLUME=80` (optional).
+
+   Railway supplies `PORT` automatically. In the Discord Developer Portal, enable the Message Content Intent for apostrophe commands; invite the bot with `bot` and `applications.commands` scopes and grant Connect, Speak, Send Messages, and Embed Links.
+
+Playback state is checkpointed periodically and saved on a normal shutdown; after an abrupt crash, the restored position may be a few seconds behind. Without a persistent volume, Railway's filesystem is temporary and playback state will not survive a redeploy.
 
 ## Commands
 
-Commands are slash commands only:
+Use `/help` or `'help` for a public, categorized command guide. Choose `all`, `guide`, `playback`, `queue`, `voice`, or `settings` with its optional `category` option. Slash-command responses are public in the channel.
 
-- `/security`
-- `/offline` and `/online` (owner only; `/online` restores the Twitch stream presence)
-- `/help`
-- `/setup`
-- `/backup`
-- `/lockdown on|off`
-- `/quarantine @user`
-- `/allow @user`
-- `/incident`
+Every slash command also accepts an apostrophe prefix in a server, for example `'play lo-fi beats`, `'pause`, or `'vol 80`. Shortcuts include `'p` (play), `'q` (queue), `'sh` (shuffle), `'vol` (volume), `'pa` (pause), and `'r` (resume); `'ping` and `'uptime` show bot status.
 
-Prefix messages are ignored except for the automatic mass-mention containment check.
+Status: `/ping` or `'ping` shows the Discord gateway latency. `/uptime` or `'uptime` shows how long the bot process has been running.
 
-The legacy Nyx command set is also available as slash commands, including `/ping`,
-`/uptime`, `/urban`, `/suggest`, `/snipe`, `/whois`,
-`/roleinfo`, `/botinfo`, `/stats`, `/warn`, `/warns`, `/kick`, `/mute`,
-`/muterole`, `/ban`, `/unban`, `/unmute`, `/tempmute`, `/delete`, `/mock`,
-`/eball`, `/say`, `/mimic`, `/stop`, `/afk`, `/purge`, `/av`, `/analyse`,
-`/wl`, `/bl`, `/unbl`, `/status`, `/secret`, `/weather`, `/invite`,
-`/userinfo`, `/servers`, `/inv`, `/calc`, `/hug`, `/kiss`, `/emotions`,
-`/youtube`, `/leave`, `/banlist`, `/role`, `/randommember`, `/memberinsights`,
-`/serverhealth`, `/channelpulse`, `/serverreport`, `/roleinsights`,
-`/memberactivity`, `/voiceinsights`, `/analytics`, `/cloud`, `/topmessages`,
-`/topwords`, `/wordcloud`, `/joins`, `/leaves`, `/voiceactivity`,
-`/messagechanges`, `/timezone`, `/define`, `/poll`, and `/remind`.
+Playback: `/play`, `/pause`, `/resume`, `/skip`, `/stop`, `/nowplaying`, `/bassboost` (or `'bb`), and `/eightd` (or `'8d`). Bass boost and 8D audio apply to the current track without skipping it, and stay enabled for subsequent tracks until toggled off.
 
-The log channel receives structured records for setup, lockdowns, quarantines, timeouts, allowlist changes, raid detections, and anti-nuke responses, including actor, target, result, and reason.
+Lyrics: `/lyrics` or `'ly` shows the currently playing song and links to its Genius lyrics page. If nothing is playing, the bot says so.
 
-Confirmed anti-nuke executors can be automatically banned with `AUTO_BAN_ATTACKERS=true`, and bots joining during a detected raid or lockdown can be blocked with `AUTO_BAN_RAID_BOTS=true`. ab deliberately does not mass-ban all raid members: human joins are quarantined and the server is locked down to avoid irreversible false positives.
+Queue: `/queue`, `/shuffle`, `/loop`.
 
-Channel deletion protection defaults to `ACTION_LIMIT_CHANNEL_DELETE=1`: the first confirmed unauthorized channel deletion triggers the anti-nuke response immediately. The executor must not be allowlisted, and the bot's role must be above the executor's role for Discord to allow the ban.
+Voice: `/join`, `/leave`, `/247` (`Manage Server` required).
 
-With `IMMEDIATE_CHANNEL_DELETE_BAN=true`, a non-trusted bot is banned on the first confirmed channel deletion, independent of the rolling action counter. Duplicate delivery of the same Discord audit-log entry is ignored.
+Settings: `/volume`.
 
-Confirmed anti-nuke bots are banned when possible. Confirmed human attackers are quarantined, timed out, and have manageable roles containing dangerous permissions removed (`Administrator`, channel/role management, bans, kicks, webhooks, messages, mentions, or moderation). Trusted users and trusted roles are exempt.
+`/play <query>` and `'play <query>` accept YouTube URLs/searches and Spotify track, album, or playlist links such as `https://open.spotify.com/playlist/<id>`. Only tracks with a verified duration of six minutes or less are played; longer and unknown-duration tracks are skipped in Spotify releases or rejected for direct requests. Spotify supplies track metadata and the bot matches each track to YouTube audio; yt-dlp supplies the playable Opus stream. Spotify links require `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`.
 
-After a confirmed anti-nuke response, lockdown automatically releases after `NUKE_LOCKDOWN_SECONDS` (60 seconds by default) when `AUTO_UNLOCK_AFTER_NUKE=true`. Set it to `false` if you want lockdown to remain until an administrator runs `/lockdown off`.
+`/nowplaying` and `'np` post a live card that refreshes playback position every second and shows track artwork when available. `/play` and `'play` use the same live card, labeled with the queue addition. Spotify playlists and albums are paginated up to the configured `MAX_QUEUE_SIZE`.
 
-Mass-mention containment detects unauthorized `@everyone`/`@here` messages, deletes the triggering message, locks down the server, deletes guild webhooks, optionally bans the responsible member, and restores the saved server identity. ab snapshots each guild's name/icon in `data/guild-backups.json` while online; you can override it with `BACKUP_GUILD_NAME` and `BACKUP_GUILD_ICON_URL`. It does **not** purge all server history. Grant Manage Webhooks and Manage Guild if you want those recovery actions enabled.
+`/queue` and `'q` show a paginated queue embed with up to 10 tracks per page, the currently playing track, and the Discord account that requested each song. Use the arrow buttons to move between pages; only the person who ran the command can control them.
 
-Important limitation: Discord removes a bot's ability to act after the bot is banned or kicked. ab therefore cannot rename a server after its own removal; it saves the identity beforehand and restores it during an active containment event.
+Playback state is saved in `data/music-state.json` and restored at startup, including the current track position, queue, repeat mode, volume, requester IDs, and voice channel. Set `MUSIC_STATE_FILE` to choose another local file. The host must preserve this file across restarts; use a persistent disk on hosts with ephemeral filesystems.
 
-`/backup` creates a local snapshot in `data/zy.sqlite` containing all recoverable server data: identity/settings, roles, channels/categories and permission overwrites, emojis, stickers, scheduled events, bans, and webhook metadata. Webhook tokens and other secrets are never stored. The SQLite database uses WAL journaling and survives bot restarts and normal process crashes. It is non-destructive. Discord does not provide a complete export of message history, member passwords/tokens, or every managed integration, so those cannot be backed up by a bot.
+The bot uses Do Not Disturb presence and listens to the active track title, switching to `'play` when nothing is playing. Pause and resume replies use a dark embed with the requesting user's avatar and the action time.
 
-The same snapshot is also created automatically at startup and after Discord reports guild, channel, role, emoji, sticker, scheduled-event, ban, or webhook changes. A periodic integrity scan (configured by `BACKUP_SCAN_INTERVAL_SECONDS`, five minutes by default) catches changes whose gateway event was missed. Snapshots are briefly debounced so a burst of related changes is saved once, and detected differences are written to the security log channel. The original guild name and icon remain separately preserved for identity restoration. Legacy JSON backups are read once as a migration fallback.
+When the queue runs out after a track finishes, the bot tries distinct YouTube suggestions with verified durations of six minutes or less, moving on if a suggestion cannot be played. `/volume` and `'volume` change the active track immediately as well as setting the level for upcoming tracks.
 
-When a nuke is confirmed, `AUTO_CLEANUP_NUKE_ARTIFACTS=true` removes only channels and roles created by the confirmed attacker within `NUKE_CLEANUP_WINDOW_SECONDS` (60 seconds by default). ab preserves `@everyone`, managed roles, the quarantine role, and ab's own security category/log channel.
+## Permissions and troubleshooting
 
-Logging coalesces identical repeated events for `LOG_DEDUPE_WINDOW_SECONDS` (5 seconds by default). The first event is logged immediately, and a summary reports the number of duplicate events suppressed so the log channel stays readable without hiding activity.
-
-
-No bot can guarantee protection against every compromise: keep ownership secure, require 2FA for moderators, minimize bot permissions, and never share the token.
+The bot must be above any channel restrictions and have Connect/Speak permissions in the target voice channel. If audio fails, check that the host can reach YouTube and that `npm install` completed successfully. Never commit `.env` or your bot token.
