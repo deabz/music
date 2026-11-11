@@ -1502,9 +1502,35 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-prepareYouTubeCookies()
-  .then(() => client.login(config.token))
-  .catch(error => {
-    console.error(`[startup] Could not prepare YouTube cookies or log in: ${error.message}`);
+
+client.on(Events.Error, error => {
+  console.error(`[discord] Client error: ${error.code || error.name}`);
+});
+client.on(Events.ShardError, (error, shardId) => {
+  console.error(`[discord] Shard ${shardId} error: ${error.code || error.name}`);
+});
+client.on(Events.ShardDisconnect, (event, shardId) => {
+  console.error(`[discord] Shard ${shardId} disconnected with code ${event.code}.`);
+});
+
+async function startBot() {
+  let phase = "YouTube cookie preparation";
+  const startupTimer = setTimeout(() => {
+    console.error(`[startup] Still waiting for ${phase} after 30 seconds. Discord ready: ${client.isReady()}.`);
+  }, 30000);
+  startupTimer.unref();
+  client.once(Events.ClientReady, () => clearTimeout(startupTimer));
+  try {
+    console.log("[startup] Preparing YouTube cookies (if configured).");
+    await prepareYouTubeCookies();
+    phase = "Discord login";
+    console.log("[startup] Cookie preparation complete. Connecting to Discord.");
+    await client.login(config.token);
+  } catch (error) {
+    clearTimeout(startupTimer);
+    console.error(`[startup] Failed during ${phase}: ${error.code || error.name}`);
     process.exit(1);
-  });
+  }
+}
+
+startBot();
