@@ -2,6 +2,9 @@ const MAX_TRACK_DURATION_SECONDS = 30 * 60;
 const MAX_SUGGESTED_TRACK_DURATION_SECONDS = 6 * 60;
 const ytdlp = require("youtube-dl-exec");
 
+const youtubeCookieOptions = (file = process.env.YOUTUBE_COOKIES_FILE) =>
+  typeof file === "string" && file.trim() ? { cookies: file.trim() } : {};
+
 const hasAllowedDuration = duration =>
   Number.isFinite(duration) && duration > 0 && duration <= MAX_TRACK_DURATION_SECONDS;
 
@@ -45,6 +48,7 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp) {
     skipDownload: true,
     noWarnings: true,
     quiet: true,
+    ...youtubeCookieOptions(),
     ffmpegLocation: require('ffmpeg-static')
   });
   const entries = Array.isArray(result.entries) ? result.entries : [];
@@ -121,6 +125,7 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
     flatPlaylist: true,
     noWarnings: true,
     quiet: true,
+    ...youtubeCookieOptions(),
     ffmpegLocation: require('ffmpeg-static')
   });
   const entries = Array.isArray(result.entries) ? result.entries : [];
@@ -135,4 +140,4 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
   })).filter(entry => entry.url && entry.title && hasAllowedDuration(entry.duration));
 }
 
-module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist };
+module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions };

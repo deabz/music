@@ -1,6 +1,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { createHealthServer } = require("../src/health-server");
+const { healthPage } = require("../src/health-page");
+const { dashboardPage } = require("../src/dashboard-page");
 
 async function withServer(options, run) {
   const server = createHealthServer({
@@ -22,6 +24,11 @@ async function withServer(options, run) {
 
 test("serves public pages and read-only health without a dashboard token", async () => {
   await withServer({}, async base => {
+    const favicon = await fetch(`${base}/favicon.svg`);
+    assert.equal(favicon.status, 200);
+    assert.match(favicon.headers.get("content-type"), /image\/svg\+xml/);
+    assert.match(await favicon.text(), /<svg/);
+
     const page = await fetch(base);
     assert.equal(page.status, 200);
     assert.match(await page.text(), /public page/);
@@ -46,6 +53,11 @@ test("serves public pages and read-only health without a dashboard token", async
     });
     assert.match(healthz.headers.get("content-type"), /application\/json/);
   });
+});
+
+test("links the favicon from the public and dashboard pages", () => {
+  assert.match(healthPage, /rel="icon"[^>]+href="\/favicon\.svg"/);
+  assert.match(dashboardPage, /rel="icon"[^>]+href="\/favicon\.svg"/);
 });
 
 test("requires the dashboard token and accepts authorized read and control requests", async () => {

@@ -6,6 +6,11 @@ const JSON_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff"
 };
+const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="#15121f" stroke="#b49aff" stroke-width="2"/>
+  <path d="M32 10 36.8 25.2 52 30l-15.2 4.8L32 50l-4.8-15.2L12 30l15.2-4.8L32 10Z" fill="#d3c2ff"/>
+  <circle cx="49" cy="14" r="2" fill="#b49aff"/>
+</svg>`;
 const MAX_REQUEST_BYTES = 16 * 1024;
 
 function sendJson(response, statusCode, payload) {
@@ -55,6 +60,16 @@ async function readJson(request) {
 function createHealthServer({ page, dashboardPage, getStatus, dashboardToken, getDashboard, controlDashboard }) {
   return http.createServer(async (request, response) => {
     const pathname = new URL(request.url || "/", "http://localhost").pathname;
+    if (request.method === "GET" && pathname === "/favicon.svg") {
+      response.writeHead(200, {
+        "Content-Type": "image/svg+xml; charset=utf-8",
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff"
+      });
+      response.end(FAVICON);
+      return;
+    }
+
     if (request.method === "GET" && (pathname === "/" || pathname === "/health")) {
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",

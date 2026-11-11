@@ -45,8 +45,6 @@ const commands = [
   new SlashCommandBuilder().setName("search").setDescription("Search for a song and pick the result.")
     .addStringOption(o => o.setName("query").setDescription("Song name").setRequired(true)),
   new SlashCommandBuilder().setName("stats").setDescription("Show bot statistics."),
-  new SlashCommandBuilder().setName("playlist").setDescription("Play a YouTube playlist.")
-    .addStringOption(o => o.setName("url").setDescription("Playlist URL").setRequired(true)),
   new SlashCommandBuilder().setName("set-notification-channel").setDescription("Set the channel for music notifications.")
     .addChannelOption(o => o.setName("channel").setDescription("Channel").setRequired(true)),
   new SlashCommandBuilder().setName("join").setDescription("Connect to the voice channel you are currently in."),
@@ -66,7 +64,7 @@ const commands = [
 
 const helpCategories = [
   { name: "Guide", value: "guide", description: "Browse the command guide and bot status.", commands: ["help", "ping", "uptime", "stats"] },
-  { name: "Playback", value: "playback", description: "Search YouTube or play YouTube and Spotify tracks, albums, and playlists.", commands: ["play", "pause", "resume", "pause-track", "resume-track", "skip", "stop", "nowplaying", "lyrics", "forward", "playlist", "bassboost", "eightd", "nightcore", "echo"] },
+  { name: "Playback", value: "playback", description: "Search YouTube or play YouTube and Spotify tracks, albums, and playlists.", commands: ["play", "pause", "resume", "skip", "stop", "nowplaying", "lyrics", "forward", "bassboost", "eightd", "nightcore", "echo"] },
   { name: "Queue", value: "queue", description: "Review, shuffle, and repeat upcoming tracks.", commands: ["queue", "shuffle", "loop", "remove", "move", "clear", "search"] },
   { name: "Voice", value: "voice", description: "Manage the bot's voice connection.", commands: ["join", "leave", "247"] },
   { name: "Settings", value: "settings", description: "Adjust audio and notifications for this server.", commands: ["volume", "volup", "voldown", "set-notification-channel"] }
@@ -99,7 +97,6 @@ const commandAliases = {
   cl: "clear",
   sr: "search",
   stt: "stats",
-  pl: "playlist",
   sn: "set-notification-channel"
 };
 
@@ -114,15 +111,15 @@ const buildHelpEmbed = category => {
       const command = commandByName.get(name);
       if (!command) return `\`/${name}\` — Command not found`;
 
-      // format: /command <opt1> <opt2> | 'alias <opt1> <opt2>' - description
+      // format: /command <opt1> <opt2> | .alias <opt1> <opt2>' - description
       const slashOptions = command.options?.map(option => `<${option.name}>`).join(" ") || "";
       const prefixOptions = command.options?.map(option => `<${option.name}>`).join(" ") || "";
       const alias = Object.entries(commandAliases).find(([, target]) => target === name)?.[0];
 
       const slashPart = `\`/${command.name}${slashOptions ? ` ${slashOptions}` : ""}\``;
       const prefixPart = alias
-        ? `\`'${alias}${prefixOptions ? ` ${prefixOptions}` : ""}\``
-        : `\`'${command.name}${prefixOptions ? ` ${prefixOptions}` : ""}\``;
+        ? `\`.${alias}${prefixOptions ? ` ${prefixOptions}` : ""}\``
+        : `\`.${command.name}${prefixOptions ? ` ${prefixOptions}` : ""}\``;
 
       return `${slashPart} ${prefixPart} — ${command.description}`;
     }).join("\n"),
@@ -133,7 +130,7 @@ const buildHelpEmbed = category => {
     .setColor(0x5865F2)
     .setTitle(category === "all" ? "Music | Command guide" : `Music | ${selectedCategories[0].name}`)
     .setDescription(category === "all"
-      ? "Run commands with `/` or use apostrophe shortcuts such as `'p lo-fi beats` or `'q`. Choose a category with `/help category:<category>`."
+      ? "Run commands with `/` or use dot shortcuts such as `.p lo-fi beats` or `.q`. Choose a category with `/help category:<category>`."
       : selectedCategories[0].description)
     .addFields(fields)
     .setFooter({ text: "Command options shown in angle brackets are required." })
@@ -190,7 +187,7 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
     });
 
   if (!pageTracks.length) {
-    embed.setDescription("The queue is empty. Add a song with `/play` or `'play`.");
+    embed.setDescription("The queue is empty. Add a song with `/play` or `.play`.");
   } else {
     embed.setDescription(pageTracks.map((track, index) => {
       const number = currentPage * QUEUE_PAGE_SIZE + index + 1;
@@ -280,7 +277,7 @@ const buildStatsEmbed = (state, uptime) => {
 };
 
 const parsePrefixCommand = content => {
-  const match = content.match(/^'\s*([a-z0-9]+)(?:\s+([\s\S]*))?$/i);
+  const match = content.match(/^\.([a-z0-9]+)(?:\s+([\s\S]*))?$/i);
   if (!match) return null;
   const input = match[1].toLowerCase();
   return { name: commandAliases[input] || input, args: (match[2] || "").trim() };

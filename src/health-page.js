@@ -5,6 +5,7 @@ const healthPage = `<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09090d">
   <meta name="description" content="A little more music, a lot less fuss. See live playback and explore the Discord music bot.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Nyx — Music for your Discord</title>
   <style>
     :root {
@@ -192,15 +193,15 @@ const healthPage = `<!doctype html>
       </div>
     </section>
     <section id="commands" class="section" aria-labelledby="commands-title">
-      <div class="section-heading"><div><h2 id="commands-title">A command away</h2><p>Use slash commands in Discord, or try a quick apostrophe shortcut.</p></div></div>
+      <div class="section-heading"><div><h2 id="commands-title">A command away</h2><p>Use slash commands in Discord, or try a quick dot shortcut.</p></div></div>
       <div class="commands">
         <div><h3>Start listening</h3><p class="commands-intro">Pick a track, then let everyone add to the queue. For the full list, use <span class="command">/help</span> in your server.</p></div>
         <div class="command-list" aria-label="Popular commands">
-          <span class="command">/play</span><span class="command">'p</span><span class="command">/queue</span><span class="command">'q</span>
+          <span class="command">/play</span><span class="command">.p</span><span class="command">/queue</span><span class="command">.q</span>
           <span class="command">/pause</span><span class="command">/skip</span><span class="command">/shuffle</span><span class="command">/volume</span>
-          <span class="command">/nowplaying</span><span class="command">'np</span><span class="command">/bassboost</span><span class="command">'bb</span>
-          <span class="command">/eightd</span><span class="command">'8d</span><span class="command">/nightcore</span><span class="command">'nc</span>
-          <span class="command">/echo</span><span class="command">'ec</span><span class="command">/remove</span><span class="command">'rm</span>
+          <span class="command">/nowplaying</span><span class="command">.np</span><span class="command">/bassboost</span><span class="command">.bb</span>
+          <span class="command">/eightd</span><span class="command">.8d</span><span class="command">/nightcore</span><span class="command">.nc</span>
+          <span class="command">/echo</span><span class="command">.ec</span><span class="command">/remove</span><span class="command">.rm</span>
         </div>
       </div>
     </section>

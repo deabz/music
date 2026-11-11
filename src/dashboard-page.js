@@ -1,9 +1,12 @@
+const { MAX_TRACK_DURATION_SECONDS } = require("./music-utils");
+
 const dashboardPage = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#09090d">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>Nyx — Music controls</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; background: #09090d; color: #f6f4fb; --muted: #aaa6b7; --line: #ffffff18; --purple: #b49aff; }
@@ -114,7 +117,7 @@ const dashboardPage = `<!doctype html>
             <label>Voice channel<select id="voice-channel"></select></label>
             <div class="controls"><button id="connect" type="button">Connect</button><button id="disconnect" class="danger" type="button">Disconnect</button></div>
           </div>
-          <p class="footnote">Seeking restarts the audio stream at the selected position. Song search and YouTube links are supported; YouTube tracks must be six minutes or shorter.</p>
+          <p class="footnote">Seeking restarts the audio stream at the selected position. Song search and YouTube links are supported; YouTube tracks must be ${MAX_TRACK_DURATION_SECONDS / 60} minutes or shorter.</p>
         </section>
         <section class="panel" aria-labelledby="queue-title">
           <h2 id="queue-title">Up next <span id="queue-count" class="muted"></span></h2>

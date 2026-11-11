@@ -1,7 +1,6 @@
 require("dotenv").config();
 
-const fs = require("fs/promises");
-const path = require("path");
+const storage = require("./storage");
 const { spawn } = require("child_process");
 const play = require("play-dl");
 const ytdlp = require("youtube-dl-exec");
@@ -22,7 +21,7 @@ const {
 const { createHealthServer } = require("./health-server");
 const { healthPage } = require("./health-page");
 const { dashboardPage } = require("./dashboard-page");
-const { formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl } = require("./music-utils");
+const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions } = require("./music-utils");
 const {
   ActivityType,
   Client,
@@ -72,7 +71,6 @@ const config = {
   maxQueueSize: numberEnv("MAX_QUEUE_SIZE", 2000, 1, 2000)
 };
 const startedAt = Date.now();
-const musicStateFile = path.resolve(process.env.MUSIC_STATE_FILE || "data/music-state.json");
 let musicSaveTimer = null;
 let musicSaveChain = Promise.resolve();
 let savedMusicStates = {};
@@ -98,11 +96,7 @@ async function writeMusicState() {
     ...savedMusicStates,
     ...Object.fromEntries([...music].map(([guildId, state]) => [guildId, musicSnapshot(state)]))
   };
-  const content = JSON.stringify({ version: 1, guilds }, null, 2);
-  await fs.mkdir(path.dirname(musicStateFile), { recursive: true });
-  const temporaryFile = `${musicStateFile}.${process.pid}.tmp`;
-  await fs.writeFile(temporaryFile, content, "utf8");
-  await fs.rename(temporaryFile, musicStateFile);
+  await storage.saveGuilds(guilds);
 }
 
 function scheduleMusicSave() {
@@ -116,21 +110,12 @@ function scheduleMusicSave() {
 }
 
 async function loadMusicState() {
+  musicStateLoaded = false;
   try {
-    const parsed = JSON.parse(await fs.readFile(musicStateFile, "utf8"));
-    if (parsed.version !== 1 || !parsed.guilds || typeof parsed.guilds !== "object" || Array.isArray(parsed.guilds)) {
-      throw new Error("Unsupported or invalid music state file format.");
-    }
-    savedMusicStates = parsed.guilds;
+    savedMusicStates = await storage.loadAll();
     musicStateLoaded = true;
   } catch (error) {
-    if (error.code === "ENOENT") {
-      savedMusicStates = {};
-      musicStateLoaded = true;
-    } else {
-      console.error(`[persistence] Could not load music state; leaving the file untouched: ${error.message}`);
-      musicStateLoaded = false;
-    }
+    console.error(`[persistence] Could not load music state; leaving stored state untouched and saving disabled: ${error.message}`);
   }
 }
 
@@ -151,6 +136,7 @@ class GuildMusic {
     this.streamProcess = null;
     this.filterProcess = null;
     this.emptyTimer = null;
+    this.pausedForEmpty = false;
     this.notificationChannelId = null;
     this.playing = false;
     this.totalTracksPlayed = 0;
@@ -203,8 +189,11 @@ class GuildMusic {
 
   async connect(channel) {
     if (!channel || !channel.isVoiceBased()) throw new Error("Join a voice channel first.");
-    if (this.connection && this.connection.joinConfig.channelId === channel.id) return this.connection;
-    if (this.connection) this.connection.destroy();
+    if (this.connection && this.connection.state.status !== VoiceConnectionStatus.Destroyed
+      && this.connection.joinConfig.channelId === channel.id) return this.connection;
+    if (this.connection && this.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+      this.connection.destroy();
+    }
     this.connection = joinVoiceChannel({
       channelId: channel.id,
       guildId: channel.guild.id,
@@ -221,14 +210,17 @@ class GuildMusic {
       console.log(`[voice:${this.guild.id}] ${previous.status} -> ${next.status}`);
       if (next.status === VoiceConnectionStatus.Disconnected) {
         entersState(connection, VoiceConnectionStatus.Signalling, 5000)
-          .catch(() => this.connection?.destroy());
+          .catch(() => {
+            if (this.connection === connection
+              && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+          });
       }
     });
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 15000);
     } catch (error) {
       const status = connection.state.status;
-      connection.destroy();
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
       if (this.connection === connection) this.connection = null;
       console.error(`[voice:${this.guild.id}] Failed to reach Ready (last state: ${status}): ${error.stack || error.message}`);
       const detail = status === VoiceConnectionStatus.Signalling
@@ -242,14 +234,14 @@ class GuildMusic {
   }
 
   async add(items, voiceChannel, requesterId, notificationChannel) {
-    await this.connect(voiceChannel);
     const tooLong = items.find(track => !hasAllowedDuration(track.duration));
     if (tooLong) {
-      throw new Error(`"${tooLong.title}" is longer than 6 minutes or has no verified duration. Tracks must be 6 minutes or shorter.`);
+      throw new Error(`"${tooLong.title}" is longer than ${MAX_TRACK_DURATION_SECONDS / 60} minutes or has no verified duration. Tracks must be ${MAX_TRACK_DURATION_SECONDS / 60} minutes or shorter.`);
     }
     if (this.queue.length + items.length > config.maxQueueSize) {
       throw new Error(`The queue can contain at most ${config.maxQueueSize} tracks.`);
     }
+    await this.connect(voiceChannel);
     this.queue.push(...items.map(track => ({ ...track, requestedById: requesterId })));
     this.autoplayTriedUrls.clear();
     this.notificationChannelId = notificationChannel?.id || null;
@@ -387,6 +379,7 @@ class GuildMusic {
         noPlaylist: true,
         noWarnings: true,
         quiet: true,
+        ...youtubeCookieOptions(),
         ffmpegLocation: require('ffmpeg-static'),
         ...(this.resumeOffsetSeconds > 0
           ? { downloadSections: `*${formatYtdlpTime(this.resumeOffsetSeconds)}-inf` }
@@ -484,6 +477,7 @@ class GuildMusic {
   }
 
   stop() {
+    this.pausedForEmpty = false;
     this.queue = [];
     this.current = null;
     this.resource = null;
@@ -501,15 +495,17 @@ class GuildMusic {
   }
 
   async pausePlayback(reason) {
-    if (!this.playing) return false;
-    this.player.pause();
+    if (reason !== "empty") this.pausedForEmpty = false;
+    if (!this.playing || this.player.state.status !== AudioPlayerStatus.Playing) return false;
+    if (!this.player.pause()) return false;
     scheduleMusicSave();
     return true;
   }
 
   async resumePlayback(reason) {
+    if (reason !== "member joined") this.pausedForEmpty = false;
     if (!this.playing || this.player.state.status !== AudioPlayerStatus.Paused) return false;
-    this.player.unpause();
+    if (!this.player.unpause()) return false;
     scheduleMusicSave();
     return true;
   }
@@ -532,7 +528,9 @@ class GuildMusic {
   disconnect() {
     clearTimeout(this.emptyTimer);
     this.stop();
-    this.connection?.destroy();
+    if (this.connection && this.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+      this.connection.destroy();
+    }
     this.connection = null;
     this.savedVoiceChannelId = null;
     scheduleMusicSave();
@@ -557,7 +555,7 @@ function updatePresence() {
   const active = [...music.values()].find(state => state.playing && state.current);
   const activity = active
     ? active.current.title.slice(0, 128)
-    : "'play";
+    : ".play";
   client.user.setPresence({
     status: "dnd",
     activities: [{ name: activity, type: ActivityType.Listening }]
@@ -616,7 +614,7 @@ async function replyWithQueue(context, state) {
 
   collector.on("collect", async component => {
     if (component.user.id !== context.user.id) {
-      await component.reply({ content: "Run `'q` yourself to control these pages.", ephemeral: true });
+      await component.reply({ content: "Run `.q` yourself to control these pages.", ephemeral: true });
       return;
     }
     page += component.customId === "queue:next" ? 1 : -1;
@@ -769,10 +767,25 @@ async function spotifyItems(url) {
 }
 
 async function resolveQuery(query, state = null) {
+  // YouTube Music playlist URLs use the same playlist endpoint as YouTube.
+  // Check for a list ID before yt_validate(), which can classify a watch URL
+  // containing a list parameter as a single video.
+  if (/^(?:https?:\/\/)?(?:www\.|music\.)?youtube\.com\//i.test(query)
+    && /[?&]list=([a-zA-Z0-9_-]+)/i.test(query)) {
+    const playlistTracks = await resolvePlaylist(query);
+    if (!playlistTracks.length) {
+      throw new Error(`No playable tracks up to ${MAX_TRACK_DURATION_SECONDS / 60} minutes long were found in that YouTube playlist.`);
+    }
+    if (playlistTracks.length > config.maxQueueSize) {
+      throw new Error(`That YouTube playlist exceeds the ${config.maxQueueSize}-track queue limit.`);
+    }
+    return playlistTracks;
+  }
+
   if (/open\.spotify\.com\//i.test(query)) {
     const spotifyTracks = await spotifyItems(query);
     if (!spotifyTracks.length) {
-      throw new Error("No tracks 6 minutes or shorter were found in that Spotify release.");
+      throw new Error(`No tracks ${MAX_TRACK_DURATION_SECONDS / 60} minutes or shorter were found in that Spotify release.`);
     }
 
     if (!state) {
@@ -835,7 +848,7 @@ async function resolveQuery(query, state = null) {
   if (urlType === "video") {
     const info = await play.video_basic_info(query);
     if (!hasAllowedDuration(info.video_details.durationInSec)) {
-      throw new Error("That track is longer than 6 minutes or has no verified duration. Tracks must be 6 minutes or shorter.");
+      throw new Error(`That track is longer than ${MAX_TRACK_DURATION_SECONDS / 60} minutes or has no verified duration. Tracks must be ${MAX_TRACK_DURATION_SECONDS / 60} minutes or shorter.`);
     }
     return [{
       url: query,
@@ -847,7 +860,7 @@ async function resolveQuery(query, state = null) {
   }
   const results = await searchYouTube(query, 10);
   const match = results.find(result => hasAllowedDuration(result.durationInSec) && result.url);
-  if (!match) throw new Error("No YouTube results 6 minutes or shorter were found.");
+  if (!match) throw new Error(`No YouTube results ${MAX_TRACK_DURATION_SECONDS / 60} minutes or shorter were found.`);
   return [{
     url: match.url,
     title: match.title,
@@ -1008,28 +1021,32 @@ const handleCommand = async interaction => {
       return interaction.editReply("Connected to the configured 24/7 voice channel.");
     }
     if (interaction.commandName === "pause") {
-      state.player.pause();
+      if (!await state.pausePlayback("manual")) return reply(interaction, "Nothing is playing.");
       return interaction.reply({
         embeds: [buildPlaybackEmbed({ user: interaction.user, title: "Playback paused", track: state.current })]
       });
     }
     if (interaction.commandName === "resume") {
-      state.player.unpause();
+      if (!await state.resumePlayback("manual")) return reply(interaction, "Playback is not paused.");
       return interaction.reply({
         embeds: [buildPlaybackEmbed({ user: interaction.user, title: "Playback resumed", track: state.current })]
       });
     }
-    if (interaction.commandName === "pause-track") {
-      state.player.pause();
-      return interaction.reply({
-        embeds: [buildPlaybackEmbed({ user: interaction.user, title: "Playback paused", track: state.current })]
-      });
-    }
-    if (interaction.commandName === "resume-track") {
-      state.player.unpause();
-      return interaction.reply({
-        embeds: [buildPlaybackEmbed({ user: interaction.user, title: "Playback resumed", track: state.current })]
-      });
+    if (interaction.commandName === "forward") {
+      if (!state.current) return reply(interaction, "Nothing is playing.");
+      const time = interaction.options.getString("time") ?? "10";
+      if (!/^(?:\d+|\d+:[0-5]\d)$/.test(time)) {
+        return reply(interaction, "Enter a positive number of seconds or m:ss, for example 10 or 1:30.");
+      }
+      const parts = time.split(":").map(Number);
+      const seconds = parts.length === 2 ? parts[0] * 60 + parts[1] : parts[0];
+      if (!Number.isSafeInteger(seconds) || seconds <= 0) {
+        return reply(interaction, "Enter a positive number of seconds or m:ss, for example 10 or 1:30.");
+      }
+      const position = state.resumeOffsetSeconds + (state.resource?.playbackDuration || 0) / 1000;
+      await interaction.deferReply();
+      await state.seek(position + seconds);
+      return interaction.editReply(`Forwarded to ${formatDuration(state.resumeOffsetSeconds)}.`);
     }
     if (interaction.commandName === "skip") {
       state.player.stop(); return reply(interaction, "Skipped the current track.");
@@ -1124,8 +1141,8 @@ const handleCommand = async interaction => {
           .setPlaceholder("Select a song to add to the queue")
           .addOptions(results.map((r, i) => ({
             label: r.title.slice(0, 100),
-            description: `${r.channel?.name || "Unknown"} · ${formatDuration(r.durationInSec)}`,
-            value: JSON.stringify({ url: r.url, title: r.title, author: r.channel?.name || "Unknown", duration: r.durationInSec, thumbnail: r.thumbnails?.[0]?.url })
+            description: `${r.channel?.name || "Unknown"} · ${formatDuration(r.durationInSec)}`.slice(0, 100),
+            value: String(i)
           })));
 
         const response = await interaction.editReply({
@@ -1139,13 +1156,23 @@ const handleCommand = async interaction => {
         });
 
         collector.on("collect", async i => {
-          if (i.user.id !== interaction.user.id) return i.reply({ content: "This menu is not for you!", ephemeral: true });
-          const track = JSON.parse(i.values[0]);
-          const memberChannel = i.member.voice?.channel;
-          if (!memberChannel) return i.reply({ content: "Join a voice channel first.", ephemeral: true });
+          try {
+            if (i.user.id !== interaction.user.id) return await i.reply({ content: "This menu is not for you!", ephemeral: true });
+            const result = results[i.values[0]];
+            if (!result) throw new Error("That search result is no longer available.");
+            const track = { url: result.url, title: result.title, author: result.channel?.name || "Unknown", duration: result.durationInSec, thumbnail: result.thumbnails?.[0]?.url };
+            const memberChannel = i.member.voice?.channel;
+            if (!memberChannel) return await i.reply({ content: "Join a voice channel first.", ephemeral: true });
 
-          await state.add([track], memberChannel, i.user.id, i.channel);
-          await i.update({ content: `Added **${track.title}** to the queue!`, components: [] });
+            await i.deferUpdate();
+            await state.add([track], memberChannel, i.user.id, i.channel);
+            await i.editReply({ content: `Added **${track.title}** to the queue!`, components: [] });
+          } catch (error) {
+            console.error(`[command:search] ${error.stack || error.message}`);
+            const payload = { content: error.message || "Could not add that search result.", ephemeral: true };
+            if (i.deferred || i.replied) await i.followUp(payload).catch(() => {});
+            else await i.reply(payload).catch(() => {});
+          }
         });
 
         collector.on("end", () => {
@@ -1165,28 +1192,32 @@ const handleCommand = async interaction => {
 };
 
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  const guildId = newState.guild.id;
   const state = getMusic(newState.guild);
-  const channel = newState.channel;
-
   if (!state.connection) return;
   const voiceChannel = state.connection.joinConfig.channelId;
-  if (channel?.id !== voiceChannel) return;
+  if (oldState.channelId !== voiceChannel && newState.channelId !== voiceChannel) return;
 
-  const members = newState.guild.members.cache.filter(m => m.voice.channelId === voiceChannel && !m.user.bot);
+  const channel = newState.guild.channels.cache.get(voiceChannel);
+  const humans = channel?.members.filter(member => !member.user.bot).size;
+  if (humans === undefined) return;
+  const textChannel = state.notificationChannelId
+    ? newState.guild.channels.cache.get(state.notificationChannelId)
+    : newState.guild.systemChannel;
 
-  if (members.size === 0 && state.playing) {
-    await state.pausePlayback("empty");
-    const textChannel = state.notificationChannelId
-      ? newState.guild.channels.cache.get(state.notificationChannelId)
-      : newState.guild.systemChannel;
-    textChannel?.send("Music paused because no one is in the voice channel. ⏸️").catch(() => {});
-  } else if (members.size > 0 && state.player.state.status === AudioPlayerStatus.Paused && state.playing) {
-    await state.resumePlayback("member joined");
-    const textChannel = state.notificationChannelId
-      ? newState.guild.channels.cache.get(state.notificationChannelId)
-      : newState.guild.systemChannel;
-    textChannel?.send("Music resumed because someone joined the voice channel! 🔊").catch(() => {});
+  if (humans === 0) {
+    if (state.player.state.status === AudioPlayerStatus.Playing && await state.pausePlayback("empty")) {
+      state.pausedForEmpty = true;
+      textChannel?.send("Music paused because no one is in the voice channel.").catch(() => {});
+    }
+    state.scheduleEmptyDisconnect();
+  } else {
+    clearTimeout(state.emptyTimer);
+    state.emptyTimer = null;
+    const shouldResume = state.pausedForEmpty;
+    state.pausedForEmpty = false;
+    if (shouldResume && await state.resumePlayback("member joined")) {
+      textChannel?.send("Music resumed because someone joined the voice channel!").catch(() => {});
+    }
   }
 });
 
@@ -1212,21 +1243,28 @@ client.on(Events.MessageCreate, async message => {
 
   const options = command.options || [];
   const argument = parsed.args;
+  const positions = argument.split(/\s+/);
   const sendMessage = content => message.reply({
     content,
     allowedMentions: { repliedUser: false }
   });
 
   if (options.some(option => option.required) && !argument) {
-    await sendMessage(`Usage: \`'${parsed.name} ${options.map(option => `<${option.name}>`).join(" ")}\``);
+    await sendMessage(`Usage: \`.${parsed.name} ${options.map(option => `<${option.name}>`).join(" ")}\``);
     return;
   }
   if (parsed.name === "volume" && !/^(?:[0-9]|[1-9][0-9]|1[0-9]{2}|200)$/.test(argument)) {
-    await sendMessage("Volume must be a whole number from 0 to 200. Example: `'volume 80`.");
+    await sendMessage("Volume must be a whole number from 0 to 200. Example: `.volume 80`.");
+    return;
+  }
+  if (["remove", "move"].includes(parsed.name)
+    && (positions.length !== (parsed.name === "move" ? 2 : 1)
+      || positions.some(value => !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1))) {
+    await sendMessage(parsed.name === "move" ? "Usage: `.move <from> <to>` (positive integers)." : "Usage: `.remove <position>` (a positive integer).");
     return;
   }
   if (parsed.name === "loop" && !["off", "track", "queue"].includes(argument.toLowerCase())) {
-    await sendMessage("Repeat mode must be `off`, `track`, or `queue`. Example: `'loop queue`.");
+    await sendMessage("Repeat mode must be `off`, `track`, or `queue`. Example: `.loop queue`.");
     return;
   }
   if (parsed.name === "help" && argument && !["all", "guide", "playback", "queue", "voice", "settings"].includes(argument.toLowerCase())) {
@@ -1234,7 +1272,7 @@ client.on(Events.MessageCreate, async message => {
     return;
   }
   if (!options.length && argument) {
-    await sendMessage(`This command takes no arguments. Use \`'${parsed.name}\`.`);
+    await sendMessage(`This command takes no arguments. Use \`.${parsed.name}\`.`);
     return;
   }
 
@@ -1249,13 +1287,16 @@ client.on(Events.MessageCreate, async message => {
     deferred: false,
     options: {
       getString(name) {
-        if (name === "query" && parsed.name === "play") return argument;
-        if (name === "category" && parsed.name === "help") return argument || null;
-        if (name === "mode" && parsed.name === "loop") return argument;
+        if (name === "query" && ["play", "search"].includes(parsed.name)) return argument;
+        if (name === "time" && parsed.name === "forward") return argument || null;
+        if (name === "category" && parsed.name === "help") return argument.toLowerCase() || null;
+        if (name === "mode" && parsed.name === "loop") return argument.toLowerCase();
         if (name === "channel" && parsed.name === "set-notification-channel") return argument;
         return null;
       },
       getInteger(name) {
+        if (name === "position" && parsed.name === "remove") return Number(argument);
+        if (parsed.name === "move" && ["from", "to"].includes(name)) return Number(positions[name === "from" ? 0 : 1]);
         return name === "percent" && parsed.name === "volume" ? Number(argument) : null;
       }
     },
@@ -1269,7 +1310,9 @@ client.on(Events.MessageCreate, async message => {
     },
     async deferReply() {
       this.deferred = true;
-      deferredMessage = await message.reply({
+      // Prefix commands are not Discord interactions; sending a reply to the
+      // invoking message fails if it was deleted while the command ran.
+      deferredMessage = await message.channel.send({
         content: "Working on your request.",
         allowedMentions: { repliedUser: false }
       });
@@ -1280,32 +1323,6 @@ client.on(Events.MessageCreate, async message => {
   };
 
   await handleCommand(prefixContext);
-});
-
-client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
-  const guildId = newState.guild.id;
-  const state = getMusic(newState.guild);
-  const channel = newState.channel;
-
-  if (!state.connection) return;
-  const voiceChannel = state.connection.joinConfig.channelId;
-  if (channel?.id !== voiceChannel) return;
-
-  const members = newState.guild.members.cache.filter(m => m.voice.channelId === voiceChannel && !m.user.bot);
-
-  if (members.size === 0 && state.playing) {
-    await state.pausePlayback("empty");
-    const textChannel = state.notificationChannelId
-      ? newState.guild.channels.cache.get(state.notificationChannelId)
-      : newState.guild.systemChannel;
-    textChannel?.send("Music paused because no one is in the voice channel. ⏸️").catch(() => {});
-  } else if (members.size > 0 && state.player.state.status === AudioPlayerStatus.Paused && state.playing) {
-    await state.resumePlayback("member joined");
-    const textChannel = state.notificationChannelId
-      ? newState.guild.channels.cache.get(state.notificationChannelId)
-      : newState.guild.systemChannel;
-    textChannel?.send("Music resumed because someone joined the voice channel! 🔊").catch(() => {});
-  }
 });
 
 function dashboardError(message, statusCode = 400) {
