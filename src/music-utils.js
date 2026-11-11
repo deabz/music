@@ -1,9 +1,30 @@
 const MAX_TRACK_DURATION_SECONDS = 30 * 60;
 const MAX_SUGGESTED_TRACK_DURATION_SECONDS = 6 * 60;
 const ytdlp = require("youtube-dl-exec");
+const fs = require("fs/promises");
+const os = require("os");
+const path = require("path");
+let writableYouTubeCookiesFile = null;
 
-const youtubeCookieOptions = (file = process.env.YOUTUBE_COOKIES_FILE) =>
+const youtubeCookieOptions = (file = writableYouTubeCookiesFile || process.env.YOUTUBE_COOKIES_FILE) =>
   typeof file === "string" && file.trim() ? { cookies: file.trim() } : {};
+
+async function prepareYouTubeCookies(file = process.env.YOUTUBE_COOKIES_FILE) {
+  if (typeof file !== "string" || !file.trim()) return;
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nyx-cookies-"));
+  const destination = path.join(directory, "cookies.txt");
+  try {
+    await fs.chmod(directory, 0o700);
+    await fs.copyFile(file.trim(), destination);
+    await fs.chmod(destination, 0o600);
+  } catch (error) {
+    await fs.unlink(destination).catch(() => {});
+    await fs.rmdir(directory).catch(() => {});
+    throw error;
+  }
+  writableYouTubeCookiesFile = destination;
+  return destination;
+}
 
 const hasAllowedDuration = duration =>
   Number.isFinite(duration) && duration > 0 && duration <= MAX_TRACK_DURATION_SECONDS;
@@ -140,4 +161,4 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
   })).filter(entry => entry.url && entry.title && hasAllowedDuration(entry.duration));
 }
 
-module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions };
+module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, prepareYouTubeCookies };

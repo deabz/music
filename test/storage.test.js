@@ -23,7 +23,7 @@ function storageModule(env, createClient = () => { throw new Error("Unexpected S
 function remoteStore(rows = []) {
   const calls = { loads: [], saves: [], deletes: [], clients: [] };
   const failures = {};
-  const env = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "test-key" };
+  const env = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SECRET_KEY: "test-key" };
   const module = storageModule(env, (...args) => {
     calls.clients.push(args);
     return { from(table) {
@@ -56,6 +56,21 @@ function remoteStore(rows = []) {
   });
   return { ...module, calls, failures };
 }
+
+test("Supabase prefers the new secret key and supports the legacy variable", async () => {
+  for (const [keys, expected] of [
+    [{ SUPABASE_SECRET_KEY: "test-secret", SUPABASE_SERVICE_ROLE_KEY: "test-legacy" }, "test-secret"],
+    [{ SUPABASE_SERVICE_ROLE_KEY: "test-legacy" }, "test-legacy"]
+  ]) {
+    let suppliedKey;
+    const { storage } = storageModule({ SUPABASE_URL: "https://example.supabase.co", ...keys }, (url, key) => {
+      suppliedKey = key;
+      return { from: () => ({ select: () => ({ order: () => ({ range: async () => ({ data: [], error: null }) }) }) }) };
+    });
+    await storage.loadAll();
+    assert.equal(suppliedKey, expected);
+  }
+});
 
 test("Supabase loads all pages and batches only changed snapshots", async () => {
   const rows = Array.from({ length: 1001 }, (_, index) => ({ guild_id: String(index), state: { volume: 80 } }));
@@ -124,7 +139,7 @@ test("Supabase delete is filtered; failed deletion retains cached state", async 
 test("missing either Supabase variable preserves versioned atomic JSON storage", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "music-storage-"));
   try {
-    for (const partial of [{}, { SUPABASE_URL: "https://example.supabase.co" }, { SUPABASE_SERVICE_ROLE_KEY: "test-key" }]) {
+    for (const partial of [{}, { SUPABASE_URL: "https://example.supabase.co" }, { SUPABASE_SECRET_KEY: "test-key" }, { SUPABASE_SERVICE_ROLE_KEY: "test-key" }]) {
       const file = path.join(directory, "nested", `state-${Object.keys(partial).join("")}.json`);
       const { storage, messages } = storageModule({ ...partial, MUSIC_STATE_FILE: file });
       assert.match(messages[0], /JSON file/);

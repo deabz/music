@@ -2,7 +2,8 @@ const fs = require("fs/promises");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
 
-const useSupabase = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+const supabaseKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const useSupabase = Boolean(process.env.SUPABASE_URL && supabaseKey);
 const musicStateFile = path.resolve(process.env.MUSIC_STATE_FILE || "data/music-state.json");
 const savedSnapshots = new Map();
 let supabase = null;
@@ -13,7 +14,7 @@ console.log(`[persistence] Using ${useSupabase ? "Supabase music_state table" : 
 
 function getSupabase() {
   if (!supabase) {
-    supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    supabase = createClient(process.env.SUPABASE_URL, supabaseKey, {
       auth: { persistSession: false }
     });
   }

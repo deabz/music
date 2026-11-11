@@ -21,7 +21,7 @@ const {
 const { createHealthServer } = require("./health-server");
 const { healthPage } = require("./health-page");
 const { dashboardPage } = require("./dashboard-page");
-const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions } = require("./music-utils");
+const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions, prepareYouTubeCookies } = require("./music-utils");
 const {
   ActivityType,
   Client,
@@ -1502,4 +1502,9 @@ async function shutdown() {
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
-client.login(config.token);
+prepareYouTubeCookies()
+  .then(() => client.login(config.token))
+  .catch(error => {
+    console.error(`[startup] Could not prepare YouTube cookies or log in: ${error.message}`);
+    process.exit(1);
+  });
