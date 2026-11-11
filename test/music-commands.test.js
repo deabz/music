@@ -52,6 +52,45 @@ function guildMusicClass(overrides = {}) {
   });
 }
 
+test("downloader failure after EOF stops playback without repeat or autoplay and preserves queue", async () => {
+  const notices = [];
+  const GuildMusic = guildMusicClass({ console: quietConsole, updatePresence() {} });
+  const state = Object.create(GuildMusic.prototype);
+  const track = { title: "Blocked song" };
+  const queue = [{ title: "Queued song" }];
+  let rejectDownload;
+  const download = new Promise((_, reject) => { rejectDownload = reject; });
+  download.kill = () => {};
+  Object.assign(state, {
+    guild: { id: "guild", client: { channels: { cache: new Map([["text", { send: async message => notices.push(message) }]]) } } },
+    notificationChannelId: "text", current: track, queue, playing: true,
+    streamProcess: download, loop: "track",
+    player: { stop() { state.onTrackEnd(); } }
+  });
+  state.playNext = () => assert.fail("Failed downloads must not enter repeat or autoplay");
+  const ended = state.onTrackEnd();
+  assert.equal(state.current, track, "EOF must wait for downloader result");
+  rejectDownload(new Error("HTTP Error 403: Forbidden"));
+  await ended;
+  assert.equal(state.current, null);
+  assert.equal(state.playing, false);
+  assert.equal(state.queue, queue);
+  assert.equal(notices.length, 1);
+  state.failPlayback(track, new Error("late failure"));
+  assert.equal(notices.length, 1, "Late process callbacks must be ignored");
+});
+
+test("successful downloader completion advances once despite duplicate Idle events", async () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.create(GuildMusic.prototype);
+  const track = { title: "Finished song" };
+  Object.assign(state, { current: track, streamProcess: Promise.resolve(), loop: "off" });
+  let advanced = 0;
+  state.playNext = async ended => { assert.equal(ended, track); advanced++; };
+  await Promise.all([state.onTrackEnd(), state.onTrackEnd()]);
+  assert.equal(advanced, 1);
+});
+
 test("dot prefix parses commands and aliases case-insensitively", () => {
   for (const [content, name, args] of [
     [".play song", "play", "song"],

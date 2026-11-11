@@ -6,6 +6,12 @@ const os = require("os");
 const path = require("path");
 let writableYouTubeCookiesFile = null;
 
+// Node is already installed on every bot host; yt-dlp does not enable it by default.
+const youtubeRuntimeOptions = () => ({
+  jsRuntimes: `node:${process.execPath}`,
+  remoteComponents: "ejs:github"
+});
+
 const youtubeCookieOptions = (file = writableYouTubeCookiesFile || process.env.YOUTUBE_COOKIES_FILE) =>
   typeof file === "string" && file.trim() ? { cookies: file.trim() } : {};
 
@@ -70,6 +76,7 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp) {
     noWarnings: true,
     quiet: true,
     ...youtubeCookieOptions(),
+    ...youtubeRuntimeOptions(),
     ffmpegLocation: require('ffmpeg-static')
   });
   const entries = Array.isArray(result.entries) ? result.entries : [];
@@ -147,6 +154,7 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
     noWarnings: true,
     quiet: true,
     ...youtubeCookieOptions(),
+    ...youtubeRuntimeOptions(),
     ffmpegLocation: require('ffmpeg-static')
   });
   const entries = Array.isArray(result.entries) ? result.entries : [];
@@ -161,4 +169,4 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
   })).filter(entry => entry.url && entry.title && hasAllowedDuration(entry.duration));
 }
 
-module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, prepareYouTubeCookies };
+module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };

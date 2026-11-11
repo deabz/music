@@ -21,7 +21,7 @@ const {
 const { createHealthServer } = require("./health-server");
 const { healthPage } = require("./health-page");
 const { dashboardPage } = require("./dashboard-page");
-const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions, prepareYouTubeCookies } = require("./music-utils");
+const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies } = require("./music-utils");
 const {
   ActivityType,
   Client,
@@ -157,16 +157,8 @@ class GuildMusic {
       scheduleMusicSave();
     });
     this.player.on("error", error => {
-      console.error(`[audio:${this.guild.id}] ${error.message}`);
-      const failedTrack = this.current;
-      const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
-        || this.guild.client.channels.cache.get(this.guild.systemChannelId);
-      if (failedTrack) {
-        channel?.send(`Could not play **${failedTrack.title}**. Trying the next track.`).catch(sendError => {
-          console.error(`[playback:${this.guild.id}] Could not send playback error notice: ${sendError.message}`);
-        });
-      }
-      this.onTrackEnd();
+      if (error.resource && error.resource !== this.resource) return;
+      this.failPlayback(this.current, error);
     });
   }
 
@@ -375,12 +367,13 @@ class GuildMusic {
       }
 
       const streamProcess = ytdlp.exec(next.url, {
-        format: "bestaudio",
+        format: "bestaudio[ext=webm][acodec=opus]",
         output: "-",
         noPlaylist: true,
         noWarnings: true,
         quiet: true,
         ...youtubeCookieOptions(),
+        ...youtubeRuntimeOptions(),
         ffmpegLocation: require('ffmpeg-static'),
         ...(this.resumeOffsetSeconds > 0
           ? { downloadSections: `*${formatYtdlpTime(this.resumeOffsetSeconds)}-inf` }
@@ -396,16 +389,14 @@ class GuildMusic {
         stderr = `${stderr}${chunk}`.slice(-2000);
       });
       streamProcess.on("close", (code) => {
-        if (this.streamProcess === streamProcess) this.streamProcess = null;
-        if (code !== 0 && this.playing) {
-          console.warn(`[stream:${this.guild.id}] Process exited with code ${code}. This may cause unexpected idle state.`);
-        }
+        if (streamProcess.cancelled || code === 0) return;
+        this.failPlayback(next, new Error(stderr.trim() || `yt-dlp exited with code ${code}.`));
       });
       streamProcess.catch(error => {
-        if (streamProcess.cancelled) return;
+        if (streamProcess.cancelled || this.current !== next) return;
         const detail = stderr.trim() || error.message;
         console.error(`[stream:${this.guild.id}] ${detail}`);
-        if (!sourceStream.destroyed) sourceStream.destroy(error);
+        this.failPlayback(next, new Error(detail));
       });
 
       let audioStream = sourceStream;
@@ -464,13 +455,39 @@ class GuildMusic {
     } catch (error) {
       console.error(`[stream:${this.guild.id}] ${error.message}`);
       scheduleMusicSave();
-      await this.playNext(next);
+      this.failPlayback(next, error);
     }
+  }
+
+  failPlayback(track, error) {
+    if (!track || this.current !== track) return;
+    console.error(`[playback:${this.guild.id}] ${error.message}`);
+    const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
+      || this.guild.client.channels.cache.get(this.guild.systemChannelId);
+    // Stop before emitting Idle, so errors cannot enter repeat or autoplay.
+    const queued = this.queue;
+    this.stop();
+    this.queue = queued;
+    scheduleMusicSave();
+    channel?.send(`Could not play **${track.title}**. Playback stopped; queued tracks were kept. YouTube may be blocking this host. Check the host logs and YouTube configuration before trying again.`).catch(sendError => {
+      console.error(`[playback:${this.guild.id}] Could not send playback error notice: ${sendError.message}`);
+    });
   }
 
   async onTrackEnd() {
     if (!this.current) return;
     const endedTrack = this.current;
+    const process = this.streamProcess;
+    // EOF can reach the voice player before the downloader reports its failure.
+    if (process && !process.cancelled) {
+      try {
+        await process;
+      } catch (error) {
+        if (!process.cancelled) this.failPlayback(endedTrack, error);
+        return;
+      }
+    }
+    if (this.current !== endedTrack) return;
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
@@ -659,7 +676,7 @@ function scheduleLiveNowPlaying(channelId, entry) {
     try {
       await entry.message.edit({ embeds: [liveNowPlayingEmbed(entry.state, entry.options)] });
     } catch (error) {
-      console.error(`[nowplaying:${channelId}] Could not update live message: ${error.message}`);
+      if (error.code !== 10008) console.error(`[nowplaying:${channelId}] Could not update live message: ${error.message}`);
       stopLiveNowPlaying(channelId);
       return;
     }

@@ -73,7 +73,9 @@ If either Supabase variable is missing, playback state uses `data/music-state.js
 
 The bot uses Do Not Disturb presence and listens to the active track title, switching to `.play` when nothing is playing. Pause and resume replies use a dark embed with the requesting user's avatar and the action time.
 
-When the queue runs out after a track finishes, the bot tries distinct YouTube suggestions with verified durations of six minutes or less, moving on if a suggestion cannot be played. `/volume` and `.volume` change the active track immediately as well as setting the level for upcoming tracks.
+When the queue runs out after a track finishes, the bot tries distinct YouTube suggestions with verified durations of six minutes or less. Download or audio failures stop playback and preserve the remaining queue, preventing blocked downloads from cycling through repeat or autoplay. `/volume` and `.volume` change the active track immediately as well as setting the level for upcoming tracks.
+
+For YouTube challenge solving, the bot explicitly enables the installed Node runtime and allows yt-dlp to fetch its EJS solver from GitHub. See the [yt-dlp EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS). If Render still reports `HTTP Error 403: Forbidden`, redeploy with a cleared build cache to refresh the yt-dlp binary, then check cookies and the [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). Cookies alone do not resolve every host or token restriction. Audio selection is restricted to WebM Opus to match the voice player's declared input format.
 
 ## Permissions and troubleshooting
 
