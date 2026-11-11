@@ -59,3 +59,31 @@ test("startup errors identify the stage without printing error contents or secre
   assert.equal(app.cleared(), true);
   assert.deepEqual(app.exits, [1]);
 });
+
+test("gateway diagnostics expose HTTP status and retry waits without raw debug data", () => {
+  const { Events, RESTEvents } = require("discord.js");
+  const listeners = new Map();
+  const restListeners = new Map();
+  const messages = [];
+  const diagnosticsStart = source.indexOf("client.on(Events.Error,");
+  vm.runInNewContext(source.slice(diagnosticsStart, start), {
+    Events, RESTEvents,
+    client: {
+      on: (event, callback) => listeners.set(event, callback),
+      rest: { on: (event, callback) => restListeners.set(event, callback) }
+    },
+    console: { log: message => messages.push(message), error: message => messages.push(message) }
+  });
+  restListeners.get(RESTEvents.Response)({ route: "/gateway/bot", options: { secret: "synthetic-secret" } }, { status: 429 });
+  restListeners.get(RESTEvents.RateLimited)({ route: "/gateway/bot", retryAfter: 300000, timeToReset: 1000 });
+  assert.match(messages[0], /HTTP 429/);
+  assert.match(messages[1], /Waiting 300 seconds/);
+  listeners.get(Events.Debug)("Provided token: synthetic-secret");
+  assert.equal(messages.length, 2);
+  listeners.get(Events.Debug)("[WS => Manager] Fetched Gateway Information\n\tURL: synthetic-secret");
+  listeners.get(Events.Debug)("[WS => Shard 0] Connecting to wss://synthetic-secret");
+  listeners.get(Events.Debug)("[WS => Shard 0] Waiting for identify throttle");
+  listeners.get(Events.Debug)("[WS => Shard 0] Identifying\n\tdata: synthetic-secret");
+  assert.equal(messages.length, 6);
+  assert.ok(!messages.join("\n").includes("synthetic-secret"));
+});

@@ -31,6 +31,7 @@ const {
   GatewayIntentBits,
   PermissionFlagsBits,
   REST,
+  RESTEvents,
   Routes
 } = require("discord.js");
 const {
@@ -1511,6 +1512,27 @@ client.on(Events.ShardError, (error, shardId) => {
 });
 client.on(Events.ShardDisconnect, (event, shardId) => {
   console.error(`[discord] Shard ${shardId} disconnected with code ${event.code}.`);
+});
+client.rest.on(RESTEvents.Response, (request, response) => {
+  if (request.route !== "/gateway/bot") return;
+  console.log(`[discord] Gateway API returned HTTP ${response.status}.`);
+});
+client.rest.on(RESTEvents.RateLimited, data => {
+  if (data.route !== "/gateway/bot") return;
+  const seconds = Math.ceil(Math.max(data.retryAfter, data.timeToReset) / 1000);
+  console.error(`[discord] Gateway API rate limited. Waiting ${seconds} seconds before retrying.`);
+});
+client.on(Events.Debug, message => {
+  // Log fixed milestones only; raw debug messages can contain token fragments.
+  if (message.includes("Fetched Gateway Information")) {
+    console.log("[discord] Gateway details received.");
+  } else if (message.includes("Connecting to wss://")) {
+    console.log("[discord] Opening gateway WebSocket.");
+  } else if (message.includes("Waiting for identify throttle")) {
+    console.log("[discord] Waiting for gateway identify allowance.");
+  } else if (message.includes("] Identifying")) {
+    console.log("[discord] Identifying with the gateway.");
+  }
 });
 
 async function startBot() {
