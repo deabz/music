@@ -2,7 +2,7 @@ const RECENT_SONG_MEMORY_SIZE = 50;
 // Editable: preserved in identity, rejected only for autoplay/suggestions.
 const AUTOPLAY_VERSION_KEYWORDS = ["remix", "live", "acoustic", "sped up", "slowed", "reverb", "nightcore", "8d", "cover", "karaoke", "instrumental", "mashup", "1 hour", "mix"];
 const normalize = value => String(value || "").normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()
-  .replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+  .replace(/['\u2018\u2019]/g, "").replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
 function hasVersion(value) {
   const text = ` ${normalize(value)} `;
   return AUTOPLAY_VERSION_KEYWORDS.some(word => text.includes(` ${normalize(word)} `));
