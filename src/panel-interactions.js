@@ -1,6 +1,6 @@
 const { musicAccessError } = require("./music-permissions");
 const { playbackPosition } = require("./playback-position");
-const { PANEL_PREFIX, buildEffectsMenu, buildFavouritesMenu } = require("./player-panel");
+const { PANEL_PREFIX, buildEffectsMenu, buildFavouritesMenu, formatTrackTitle } = require("./player-panel");
 
 const ACTION_PERMISSIONS = {
   play: "resume", previous: "forward", pause: "pause", next: "skip", loop: "loop",
@@ -75,7 +75,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
         if (denied) { await interaction.followUp({ content: denied, ephemeral: true }); return true; }
         const { id, ...song } = track;
         await state.add([{ ...song, autoSuggested: false }], voiceChannel, interaction.user.id, interaction.channel);
-        await interaction.editReply({ content: `Added ${song.title.slice(0, 100)}.`, components: [], allowedMentions: { parse: [] } });
+        await interaction.editReply({ content: `Added ${formatTrackTitle(song.title)}.`, components: [], allowedMentions: { parse: [] } });
       } else if (action === "suggest") {
         const selected = state.suggestions?.take(interaction.values?.[0]);
         if (!selected) {
@@ -89,7 +89,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
           if (denied) { state.suggestions.restore(selected); await interaction.followUp({ content: denied, ephemeral: true }); return true; }
           const { id, ...track } = selected;
           await state.add([{ ...track, autoSuggested: false }], voiceChannel, interaction.user.id, interaction.channel);
-          await interaction.followUp({ content: `Added ${selected.title.slice(0, 100)}.`, ephemeral: true, allowedMentions: { parse: [] } });
+          await interaction.followUp({ content: `Added ${formatTrackTitle(selected.title)}.`, ephemeral: true, allowedMentions: { parse: [] } });
         } catch (error) { state.suggestions.restore(selected); throw error; }
       } else if (action === "effects-apply") {
         await state.setAudioFilters(interaction.values, content => interaction.followUp({ content, ephemeral: true }));

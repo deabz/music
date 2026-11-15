@@ -9,6 +9,7 @@ const {
 } = require("discord.js");
 
 const QUEUE_PAGE_SIZE = 10;
+const { formatTrackTitle, short, escapePanelText } = require("./player-panel");
 
 const commands = [
   new SlashCommandBuilder().setName("bassboost").setDescription("Toggle bass boost for the current track."),
@@ -125,8 +126,8 @@ const buildPlaybackEmbed = ({ user, title, track, queuedCount }) => {
       iconURL: user.displayAvatarURL({ size: 128 })
     })
     .addFields(
-      { name: "Track", value: (track?.title || "No track is currently playing.").slice(0, 1024) },
-      { name: "Artist", value: (track?.author || "Not available").slice(0, 1024), inline: true },
+      { name: "Track", value: formatTrackTitle(track?.title || "No track is currently playing.") },
+      { name: "Artist", value: formatTrackTitle(track?.author || "Not available"), inline: true },
       { name: "When", value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true }
     )
     .setTimestamp();
@@ -144,14 +145,29 @@ const requesterLabel = track => {
   const requesterId = track?.requestedById;
   if (requesterId === "dashboard") return "Dashboard";
   if (!requesterId || requesterId === "system") return "Autoplay";
-  return `<@${requesterId}>`;
+  return /^\d{17,20}$/.test(requesterId) ? `<@${requesterId}>` : "Discord user";
 };
+
+function queuePages(queue) {
+  const pages = [[]];
+  for (const [index, track] of queue.entries()) {
+    const label = track.isCurrent ? "NOW PLAYING" : `#${index + 1}`;
+    const status = track.isCurrent ? ` \u00b7 ${escapePanelText(short(track.playbackStatus, 20))}` : "";
+    const line = `**${label}**${status}\n**${formatTrackTitle(track.title)}**\n${escapePanelText(short(track.author || "Unknown artist", 120))} \u00b7 Played by ${requesterLabel(track)}`;
+    let page = pages[pages.length - 1];
+    if (page.length === QUEUE_PAGE_SIZE || [...page, line].join("\n\n").length > 4096) { pages.push([]); page = pages[pages.length - 1]; }
+    page.push(line);
+  }
+  return pages;
+}
+const queuePageCount = queue => queuePages(queue).length;
 
 const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
   const tracks = queue;
-  const pageCount = Math.max(1, Math.ceil(tracks.length / QUEUE_PAGE_SIZE));
+  const pages = queuePages(tracks);
+  const pageCount = pages.length;
   const currentPage = Math.max(0, Math.min(page, pageCount - 1));
-  const pageTracks = tracks.slice(currentPage * QUEUE_PAGE_SIZE, (currentPage + 1) * QUEUE_PAGE_SIZE);
+  const pageTracks = pages[currentPage];
   const embed = new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle("Music queue")
@@ -161,19 +177,12 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
     });
 
   if (current) {
-    embed.addFields({ name: "Now playing", value: `**${(current.title || "Unknown track").slice(0, 180)}**\n${(current.author || "Unknown artist").slice(0, 120)} · ${playbackStatus} · Played by ${requesterLabel(current)}` });
+    embed.addFields({ name: "Now playing", value: `**${formatTrackTitle(current.title)}**\n${escapePanelText(short(current.author || "Unknown artist", 120))} \u00b7 ${escapePanelText(short(playbackStatus || "idle", 20))} \u00b7 Played by ${requesterLabel(current)}` });
   }
   if (!pageTracks.length) {
     embed.setDescription("The queue is empty. Add a song with `/play`.");
   } else {
-    embed.setDescription(pageTracks.map((track, index) => {
-      const number = currentPage * QUEUE_PAGE_SIZE + index + 1;
-      const title = (track.title || "Unknown track").replace(/[\r\n]+/g, " ").slice(0, 180);
-      const artist = (track.author || "Unknown artist").replace(/[\r\n]+/g, " ").slice(0, 120);
-      const label = track.isCurrent ? "NOW PLAYING" : `#${number}`;
-      const status = track.isCurrent ? ` · ${track.playbackStatus}` : "";
-      return `**${label}**${status}\n**${title}**\n${artist} · Played by ${requesterLabel(track)}`;
-    }).join("\n\n"));
+    embed.setDescription(pageTracks.join("\n\n"));
   }
 
   if (current?.thumbnail) embed.setThumbnail(current.thumbnail);
@@ -181,7 +190,7 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
 };
 
 const buildQueueComponents = ({ current, queue, page = 0 }) => {
-  const pageCount = Math.max(1, Math.ceil(queue.length / QUEUE_PAGE_SIZE));
+  const pageCount = queuePageCount(queue);
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("queue:previous")
@@ -222,6 +231,7 @@ module.exports = {
   buildStatsEmbed,
   formatDuration,
   QUEUE_PAGE_SIZE,
+  queuePageCount,
   commands,
   requesterLabel
 };

@@ -6,7 +6,7 @@ const storage = require("./storage");
 const { FavouritesStore } = require("./favourites");
 const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
-const { createPlayerPanel, buildPlayConfirmation } = require("./player-panel");
+const { createPlayerPanel, buildPlayConfirmation, formatTrackTitle, short } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic, streamEndDiagnostic } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
@@ -23,6 +23,7 @@ const {
   buildStatsEmbed,
   formatDuration,
   QUEUE_PAGE_SIZE,
+  queuePageCount,
   commands
 } = require("./commands");
 const { createHealthServer } = require("./health-server");
@@ -703,7 +704,7 @@ class GuildMusic {
     this.stop();
     this.queue = queued;
     scheduleMusicSave();
-    channel?.send({ content: `Could not play **${track.title}**: ${reason.message}. Playback stopped; queued tracks were kept.`, allowedMentions: { parse: [] } }).catch(sendError => {
+    channel?.send({ content: `Could not play **${formatTrackTitle(track.title)}**: ${reason.message}. Playback stopped; queued tracks were kept.`, allowedMentions: { parse: [] } }).catch(sendError => {
       console.error(`[playback:${this.guild.id}] Could not send playback error notice: ${sendError.message}`);
     });
   }
@@ -730,7 +731,7 @@ class GuildMusic {
     }
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
-    channel?.send({ content: `Could not play **${track.title}** after one retry: ${reason.message}. Trying the next queued song if available.`, allowedMentions: { parse: [] } }).catch(() => {});
+    channel?.send({ content: `Could not play **${formatTrackTitle(track.title)}** after one retry: ${reason.message}. Trying the next queued song if available.`, allowedMentions: { parse: [] } }).catch(() => {});
     this.shortStreamFailures = (this.shortStreamFailures || 0) + 1;
     // Two consecutive exhausted songs indicate a host problem: keep the rest.
     if (this.shortStreamFailures >= 2 || !this.queue.length) {
@@ -970,7 +971,7 @@ async function replyWithQueue(context, state) {
       return;
     }
     page += component.customId === "queue:next" ? 1 : -1;
-    const pageCount = Math.max(1, Math.ceil(state.queue.length / QUEUE_PAGE_SIZE));
+    const pageCount = queuePageCount(state.queue);
     page = Math.max(0, Math.min(page, pageCount - 1));
     await component.update(queuePayload());
   });
@@ -1256,7 +1257,7 @@ const handleCommand = async interaction => {
       const removed = state.queue.splice(position - 1, 1)[0];
       state.queueChanged();
       scheduleMusicSave();
-      return reply(interaction, `Removed **${removed.title}** from the queue.`);
+      return reply(interaction, `Removed **${formatTrackTitle(removed.title)}** from the queue.`);
     }
     if (interaction.commandName === "move") {
       const from = interaction.options.getInteger("from", true) - 1;
@@ -1287,8 +1288,8 @@ const handleCommand = async interaction => {
           .setCustomId(`search_select:${interaction.user.id}`)
           .setPlaceholder("Select a song to add to the queue")
           .addOptions(results.map((r, i) => ({
-            label: r.title.slice(0, 100),
-            description: `${r.channel?.name || "Unknown"} · ${formatDuration(r.durationInSec)}`.slice(0, 100),
+            label: short(r.title, 100),
+            description: short(`${r.channel?.name || "Unknown"} \u00b7 ${formatDuration(r.durationInSec)}`, 100),
             value: String(i)
           })));
 
@@ -1315,7 +1316,7 @@ const handleCommand = async interaction => {
             if (accessError) return await i.reply({ content: accessError, ephemeral: true });
             await i.deferUpdate();
             await state.add([track], memberChannel, i.user.id, i.channel);
-            await i.editReply({ content: `Added **${track.title}** to the queue!`, components: [] });
+            await i.editReply({ content: `Added **${formatTrackTitle(track.title)}** to the queue!`, components: [], allowedMentions: { parse: [] } });
           } catch (error) {
             console.error(`[command:search] ${error.stack || error.message}`);
             const payload = { content: "Could not add that search result. Check the host logs for details.", ephemeral: true };

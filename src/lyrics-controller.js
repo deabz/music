@@ -2,6 +2,7 @@ const { ComponentType } = require('discord.js');
 const { createLyricsService } = require('./lyrics');
 const { buildLyricsModal, LYRICS_MODAL_ID, PANEL_LYRICS_MODAL_ID } = require('./lyrics-input');
 const { buildGeniusSearchUrl } = require('./music-utils');
+const { formatTrackTitle, short, TRACK_TITLE_MAX_LENGTH } = require('./player-panel');
 const NO_MENTIONS = { parse: [], users: [], roles: [], repliedUser: false };
 const escapeLyrics = text => String(text || '').replace(/\\/g, '\\\\').replace(/([`*_{}\[\]()<>~|])/g, '\\$1').replace(/@/g, '@\u200b');
 function splitLyrics(text) {
@@ -18,12 +19,19 @@ function splitLyrics(text) {
   return pages;
 }
 function lyricsPayload(result, pages, page = 0) {
+  const song = formatTrackTitle(result.title);
+  const artist = formatTrackTitle(result.artist || 'Unknown artist');
+  const completeTitle = `Lyrics - ${artist} - ${song}`;
+  const title = completeTitle.length <= 256 ? completeTitle : song.length + 9 <= 256 ? `Lyrics - ${song}` : 'Lyrics';
+  const fields = completeTitle.length <= 256 ? [] : [
+    ...(song.length + 9 > 256 ? [{ name: 'Song', value: song }] : []), { name: 'Artist', value: artist }
+  ];
   const components = pages.length > 1 ? [{ type: 1, components: ['Previous', 'Next'].map((label, index) => ({
     type: 2, style: 2, custom_id: `lyrics:${index ? 'next' : 'previous'}`, label,
     disabled: index ? page === pages.length - 1 : page === 0
   })) }] : [];
   return { content: '', allowedMentions: NO_MENTIONS, components, embeds: [{ color: 0xE6B655,
-    title: `Lyrics - ${escapeLyrics(result.artist)} - ${escapeLyrics(result.title)}`.slice(0, 256),
+    title, ...(fields.length ? { fields } : {}),
     description: pages[page], footer: { text: `${pages.length > 1 ? `Page ${page + 1}/${pages.length} - ` : ''}Lyrics from LRCLIB` } }] };
 }
 function createLyricsController({ service = createLyricsService(), now = Date.now, isReady = () => true, log = console.error } = {}) {
@@ -45,7 +53,10 @@ function createLyricsController({ service = createLyricsService(), now = Date.no
       cooldowns.set(interaction.user.id, time + 5000);
       await interaction.deferReply({ ephemeral: panel });
       const result = await service.lookup(song ?? track);
-      if (!result.found) return await interaction.editReply({ content: `Couldn't find lyrics for ${escapeLyrics(result.title)}. [Search Genius](${buildGeniusSearchUrl(result.title, result.artist)})`, allowedMentions: NO_MENTIONS, components: [], embeds: [] });
+      if (!result.found) {
+        const search = buildGeniusSearchUrl(short(result.title, TRACK_TITLE_MAX_LENGTH), short(result.artist, TRACK_TITLE_MAX_LENGTH));
+        return await interaction.editReply({ content: `Couldn't find lyrics for ${formatTrackTitle(result.title)}.${search.length <= 1200 ? ` [Search Genius](${search})` : ''}`, allowedMentions: NO_MENTIONS, components: [], embeds: [] });
+      }
       const pages = result.instrumental ? ['This track is instrumental.'] : splitLyrics(result.text);
       const message = await interaction.editReply(lyricsPayload(result, pages));
       if (pages.length < 2 || !message?.createMessageComponentCollector) return;

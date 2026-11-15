@@ -280,7 +280,7 @@ function buildFavouritesMenu(tracks, userId) {
       description: short(`${track.author} - ${duration(track.duration)}`, 100) })) }] }];
 }
 function buildPlayConfirmation(tracks) {
-  return { content: tracks.length === 1 ? `**${escapePanelText(short(tracks[0].title, 100))}** added to the queue`
+  return { content: tracks.length === 1 ? `**${formatTrackTitle(tracks[0].title)}** added to the queue`
     : `**${tracks.length} tracks** added to the queue`,
   ephemeral: false, allowedMentions: { parse: [], users: [], roles: [], repliedUser: false } };
 }
