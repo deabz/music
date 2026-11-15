@@ -190,48 +190,89 @@ class GuildMusic {
 
   async connect(channel) {
     if (!channel || !channel.isVoiceBased()) throw new Error("Join a voice channel first.");
-    if (this.connection && this.connection.state.status !== VoiceConnectionStatus.Destroyed
+    while (this.connectPromise) await this.connectPromise.catch(() => {});
+    if (this.connection?.state.status === VoiceConnectionStatus.Ready
       && this.connection.joinConfig.channelId === channel.id) return this.connection;
-    if (this.connection && this.connection.state.status !== VoiceConnectionStatus.Destroyed) {
-      this.connection.destroy();
-    }
-    this.connection = joinVoiceChannel({
-      channelId: channel.id,
-      guildId: channel.guild.id,
-      adapterCreator: channel.guild.voiceAdapterCreator,
-      selfDeaf: true,
-      selfMute: false
-    });
-    const connection = this.connection;
-    this.connection.subscribe(this.player);
-    this.connection.on("error", error => {
-      console.error(`[voice:${this.guild.id}] ${error.stack || error.message}`);
-    });
-    this.connection.on("stateChange", (previous, next) => {
-      console.log(`[voice:${this.guild.id}] ${previous.status} -> ${next.status}`);
-      if (next.status === VoiceConnectionStatus.Disconnected) {
-        entersState(connection, VoiceConnectionStatus.Signalling, 5000)
-          .catch(() => {
-            if (this.connection === connection
-              && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
-          });
+    const generation = this.voiceGeneration || 0;
+    const pending = this.openConnection(channel, generation);
+    this.connectPromise = pending;
+    try { return await pending; }
+    finally { if (this.connectPromise === pending) this.connectPromise = null; }
+  }
+
+  async openConnection(channel, generation) {
+    const previous = this.connection;
+    this.connection = null;
+    if (previous && previous.state.status !== VoiceConnectionStatus.Destroyed) previous.destroy();
+    const connection = joinVoiceChannel({ channelId: channel.id, guildId: channel.guild.id,
+      adapterCreator: channel.guild.voiceAdapterCreator, selfDeaf: true, selfMute: false });
+    this.connection = connection;
+    this.savedVoiceChannelId = channel.id;
+    connection.subscribe(this.player);
+    connection.on("error", error => console.error(`[voice:${this.guild.id}] ${error.stack || error.message}`));
+    connection.on("stateChange", (before, next) => {
+      console.log(`[voice:${this.guild.id}] ${before.status} -> ${next.status}`);
+      if (this.connection !== connection || this.connectPromise) return;
+      if (next.status === VoiceConnectionStatus.Disconnected || next.status === VoiceConnectionStatus.Destroyed) {
+        this.recoverVoice(connection).catch(error => console.error(`[voice:${this.guild.id}] Recovery failed: ${error.message}`));
       }
     });
     try {
       await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+      if (generation !== (this.voiceGeneration || 0)) throw new Error("Voice connection was cancelled.");
     } catch (error) {
-      const status = connection.state.status;
-      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
       if (this.connection === connection) this.connection = null;
-      console.error(`[voice:${this.guild.id}] Failed to reach Ready (last state: ${status}): ${error.stack || error.message}`);
-      const detail = status === VoiceConnectionStatus.Signalling
-        ? "Discord's voice gateway disconnected during setup; verify the network can reach Discord voice and try again."
-        : "Voice signalling started but the connection handshake did not finish; UDP traffic may be blocked by the network.";
-      throw new Error(`Voice connection timed out in state "${status}". ${detail}`);
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+      throw error;
     }
-    this.savedVoiceChannelId = channel.id;
     scheduleMusicSave();
     return connection;
+  }
+
+  async recoverVoice(connection) {
+    if (this.recoveryPromise || this.connection !== connection) return;
+    const generation = this.voiceGeneration || 0;
+    const valid = () => generation === (this.voiceGeneration || 0);
+    const task = (async () => {
+      const wasPlaying = this.player.state.status === AudioPlayerStatus.Playing;
+      if (wasPlaying) await this.pausePlayback("voice recovery");
+      try {
+        await Promise.any([
+          entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+          entersState(connection, VoiceConnectionStatus.Connecting, 5000)
+        ]);
+        await entersState(connection, VoiceConnectionStatus.Ready, 15000);
+        if (valid() && this.connection === connection) {
+          if (wasPlaying) await this.resumePlayback("voice recovery");
+          return;
+        }
+      } catch { /* Rebuild only after normal voice recovery fails. */ }
+      if (!valid() || this.connection !== connection) return;
+      this.connection = null;
+      if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+      const channelId = this.savedVoiceChannelId;
+      for (let attempt = 1; attempt <= 2 && valid(); attempt++) {
+        try {
+          const channel = await this.guild.channels.fetch(channelId);
+          if (!valid()) return;
+          await this.connect(channel);
+          if (valid() && wasPlaying) await this.resumePlayback("voice recovery");
+          return;
+        } catch (error) { console.error(`[voice:${this.guild.id}] Reconnect ${attempt}/2 failed: ${error.message}`); }
+      }
+      if (!valid()) return;
+      const current = this.current;
+      if (current) this.queue.unshift({ ...current, resumeAtSeconds: playbackPosition(this) });
+      this.current = null;
+      this.playing = false;
+      this.invalidateNext();
+      this.cancelActive();
+      this.player.stop(true);
+      updatePresence();
+      scheduleMusicSave();
+    })();
+    this.recoveryPromise = task;
+    try { await task; } finally { if (this.recoveryPromise === task) this.recoveryPromise = null; }
   }
 
   async add(items, voiceChannel, requesterId, notificationChannel) {
@@ -244,6 +285,7 @@ class GuildMusic {
     }
     this.invalidateNext();
     await this.connect(voiceChannel);
+    if (this.queue.length + items.length > config.maxQueueSize) throw new Error("The queue is full.");
     this.queue.push(...items.map(track => ({ ...track, requestedById: requesterId })));
     this.autoplayTriedUrls.clear();
     this.notificationChannelId = notificationChannel?.id || null;
@@ -290,6 +332,15 @@ class GuildMusic {
   }
 
   async restore(snapshot, channel) {
+    if (this.restorePromise) return this.restorePromise;
+    if (this.restored || this.current) return;
+    const pending = this.restoreState(snapshot, channel);
+    this.restorePromise = pending;
+    try { await pending; this.restored = true; }
+    finally { this.restorePromise = null; }
+  }
+
+  async restoreState(snapshot, channel) {
     this.loop = ["off", "track", "queue"].includes(snapshot.loop) ? snapshot.loop : "off";
     this.volume = Number.isFinite(snapshot.volume) ? Math.max(0, Math.min(200, snapshot.volume)) : config.defaultVolume;
     this.savedVoiceChannelId = snapshot.voiceChannelId;
@@ -362,6 +413,7 @@ class GuildMusic {
   }
 
   async playNext(endedTrack = null, trackToPlay = null) {
+    if (this.current && this.playing && !trackToPlay) return;
     clearTimeout(this.emptyTimer);
     const next = trackToPlay || this.queue.shift();
     const prepared = !trackToPlay && this.prefetch?.track === next ? this.prefetch.job : null;
@@ -463,6 +515,7 @@ class GuildMusic {
   }
 
   stop() {
+    this.voiceGeneration = (this.voiceGeneration || 0) + 1;
     this.invalidateNext();
     this.cancelActive();
     this.pausedForEmpty = false;
@@ -883,7 +936,7 @@ client.once(Events.ClientReady, async ready => {
   if (config.autoJoin && config.voiceChannelId && config.voiceGuildId) {
     const guild = await ready.guilds.fetch(config.voiceGuildId).catch(() => null);
     const channel = await guild?.channels.fetch(config.voiceChannelId).catch(() => null);
-    if (channel?.isVoiceBased() && !music.get(guild.id)?.connection) {
+    if (channel?.isVoiceBased() && music.get(guild.id)?.connection?.state.status !== VoiceConnectionStatus.Ready) {
       try {
         await getMusic(guild).connect(channel);
         console.log(`Connected deafened to ${channel.name}.`);
@@ -1219,7 +1272,7 @@ function dashboardGuildSnapshot(guild) {
   return {
     id: guild.id,
     name: guild.name,
-    connected: Boolean(state?.connection),
+    connected: state?.connection?.state.status === VoiceConnectionStatus.Ready,
     voiceChannelId: channelId,
     voiceChannels: guild.channels.cache
       .filter(channel => channel.isVoiceBased())

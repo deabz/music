@@ -398,3 +398,57 @@ test("instant Idle retries once, notifies, advances and limits consecutive failu
   assert.equal(state.playing, false);
   assert.equal(cancels, 3);
 });
+
+
+test("concurrent joins share one ready connection and duplicate starts are ignored", async () => {
+  const { EventEmitter } = require("node:events");
+  let joins = 0, release;
+  const ready = new Promise(r => { release = r; });
+  const connection = new EventEmitter();
+  Object.assign(connection, { state: { status: "connecting" }, joinConfig: { channelId: "voice" }, subscribe() {}, destroy() { this.state.status = "destroyed"; } });
+  const GuildMusic = guildMusicClass({ VoiceConnectionStatus: { Ready: "ready", Destroyed: "destroyed" },
+    joinVoiceChannel() { joins++; return connection; }, entersState: () => ready });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { guild: { id: "guild" }, player: {}, queue: [] });
+  const channel = { id: "voice", isVoiceBased: () => true, guild: { id: "guild" } };
+  const one = state.connect(channel), two = state.connect(channel);
+  connection.state.status = "ready"; release(connection);
+  assert.equal(await one, connection); assert.equal(await two, connection);
+  assert.equal(joins, 1);
+  state.current = { title: "existing" }; state.playing = true;
+  await state.playNext();
+  assert.equal(state.current.title, "existing");
+});
+
+test("normal reconnect accepts Connecting and resumes without restarting track", async () => {
+  let resumed = 0, connecting = false;
+  const connection = { state: { status: "disconnected" } };
+  const GuildMusic = guildMusicClass({ VoiceConnectionStatus: { Signalling: "signalling", Connecting: "connecting", Ready: "ready" },
+    entersState: async (_, status) => {
+      if (status === "signalling") throw new Error("not signalling");
+      if (status === "connecting") connecting = true;
+      return connection;
+    } });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { connection, player: { state: { status: AudioPlayerStatus.Playing } },
+    pausePlayback: async () => true, resumePlayback: async () => { resumed++; } });
+  await state.recoverVoice(connection);
+  assert.equal(connecting, true); assert.equal(resumed, 1);
+  assert.equal(state.connection, connection);
+});
+
+test("failed reconnect clears destroyed connection, tries twice and preserves current position", async () => {
+  let attempts = 0, destroyed = 0;
+  const connection = { state: { status: "disconnected" }, destroy() { destroyed++; } };
+  const GuildMusic = guildMusicClass({ VoiceConnectionStatus: { Signalling: "signalling", Connecting: "connecting", Ready: "ready", Destroyed: "destroyed" },
+    entersState: async () => { throw new Error("timeout"); }, playbackPosition: () => 42 });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { guild: { id: "test", channels: { fetch: async () => ({}) } }, connection,
+    current: { title: "saved" }, queue: [], playing: true, player: { state: {}, stop() {} },
+    connect: async () => { attempts++; throw new Error("offline"); } });
+  await state.recoverVoice(connection);
+  assert.equal(attempts, 2); assert.equal(destroyed, 1);
+  assert.equal(state.connection, null); assert.equal(state.current, null);
+  assert.equal(state.queue[0].resumeAtSeconds, 42);
+  assert.equal(state.playing, false);
+});
