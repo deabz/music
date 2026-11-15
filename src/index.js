@@ -11,6 +11,7 @@ const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
+const { parseTransitionSettings, shouldFadeIn, TransitionController, NATURAL_HANDOVER_GRACE_MS } = require("./transitions");
 const play = require("play-dl");
 const { musicAccessError, resolveMemberVoiceChannel } = require("./music-permissions");
 const { createSpotifyClient, matchSpotifyTracks } = require("./spotify");
@@ -61,7 +62,10 @@ const numberEnv = (key, fallback, minimum, maximum) => {
   return value;
 };
 
+const transitionSettings = parseTransitionSettings(process.env);
 const config = {
+  transitionMode: transitionSettings.mode,
+  transitionSeconds: transitionSettings.seconds,
   token: process.env.DISCORD_TOKEN,
   guildId: process.env.GUILD_ID || "",
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID || "",
@@ -117,7 +121,10 @@ async function writeMusicState(options) {
 }
 
 function scheduleMusicSave() {
-  for (const state of music.values()) state.panel?.scheduleUpdate();
+  for (const state of music.values()) {
+    state.panel?.scheduleUpdate();
+    state.transitions?.refresh();
+  }
   if (shuttingDown || !musicStateLoaded) return;
   clearTimeout(musicSaveTimer);
   musicSaveTimer = setTimeout(() => {
@@ -152,6 +159,7 @@ class GuildMusic {
     this.resource = null;
     this.loop = "off";
     this.volume = config.defaultVolume;
+    this.transitions = new TransitionController(this, { mode: config.transitionMode, seconds: config.transitionSeconds });
     this.resumeOffsetSeconds = 0;
     this.pauseOnRestore = false;
     this.savedVoiceChannelId = null;
@@ -332,7 +340,8 @@ class GuildMusic {
 
   setVolume(percent) {
     this.volume = percent;
-    this.resource?.volume?.setVolume(percent / 100);
+    if (this.transitions) this.transitions.refresh();
+    else this.resource?.volume?.setVolume(percent / 100);
     scheduleMusicSave();
   }
 
@@ -463,6 +472,7 @@ class GuildMusic {
   }
 
   cancelActive() {
+    this.transitions?.cancel();
     const pipeline = this.activePipeline;
     this.activePipeline = null;
     this.resource = null;
@@ -473,6 +483,8 @@ class GuildMusic {
     if (shuttingDown || (this.current && this.playing && !trackToPlay)) return;
     clearTimeout(this.emptyTimer);
     const next = trackToPlay || this.queue.shift();
+    const natural = !trackToPlay && Boolean(endedTrack || (this.lastNaturalEndAt && Date.now() - this.lastNaturalEndAt <= NATURAL_HANDOVER_GRACE_MS));
+    if (next) this.lastNaturalEndAt = null;
     const prefetch = this.prefetch;
     const prepared = next && !trackToPlay && prefetch?.track === next ? prefetch?.job : null;
     if (prepared) this.prefetch = null;
@@ -517,6 +529,12 @@ class GuildMusic {
       this.resource = resource;
       this.resourcePlaybackRate = job.rate;
       resource.volume.setVolume(this.volume / 100);
+      if (this.transitions) {
+        this.transitions.start(resource, { restoring: Boolean(this.restorePromise), fadeIn: shouldFadeIn({
+          mode: config.transitionMode, natural, position: this.resumeOffsetSeconds,
+          restoring: Boolean(this.restorePromise), loop: this.loop, restart: Boolean(trackToPlay)
+        }) });
+      }
       console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""} input=${job.inputType}`);
       this.player.play(resource);
       this.panel?.trackStarted(next, { restoring: Boolean(this.restorePromise) });
@@ -590,12 +608,17 @@ class GuildMusic {
   async onTrackEnd() {
     const endedTrack = this.current;
     if (shuttingDown || !endedTrack) return;
+    this.transitions?.cancel();
     const job = this.activePipeline;
     if (job?.intentionallyAborted) return;
     if (job?.error) return this.failPlayback(endedTrack, job.error);
     if (this.isShortStream()) return this.retryShortStream(endedTrack, new Error("Audio ended within three seconds."));
     const position = playbackPosition(this);
-    if (Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
+    // A successful pipeline EOF can expose inaccurate duration metadata. Never
+    // wait for a fade deadline after the real audio has already ended.
+    const cleanEof = config.transitionMode !== "off" && job?.sourceEnded && job?.outputDone
+      && job?.children?.every(child => child.pipelineClosed) && !job.error;
+    if (!cleanEof && Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
       return this.failPlayback(endedTrack, new Error(`Audio ended early at ${position.toFixed(1)}s of ${endedTrack.duration}s.`));
     }
     if (job) job.naturalAudioEnd = true;
@@ -605,6 +628,7 @@ class GuildMusic {
     // Pipeline EOF already requires successful child exit; do not await anything here.
     console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Ended track=${JSON.stringify(endedTrack.title)} position=${playbackPosition(this).toFixed(1)}s duration=${endedTrack.duration}s`);
     this.rememberPlayed(endedTrack);
+    this.lastNaturalEndAt = this.loop === "track" ? null : Date.now();
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
@@ -617,6 +641,7 @@ class GuildMusic {
   }
 
   async previous() {
+    this.lastNaturalEndAt = null;
     if (!this.current) return false;
     if (playbackPosition(this) > 5 || !this.history?.length) {
       await this.seek(0);
@@ -646,6 +671,7 @@ class GuildMusic {
   }
 
   async skipCurrent() {
+    this.lastNaturalEndAt = null;
     const skipped = this.current;
     if (!skipped) return false;
     this.rememberPlayed(skipped);
@@ -663,6 +689,7 @@ class GuildMusic {
   }
 
   stop() {
+    this.lastNaturalEndAt = null;
     this.suggestions?.clearActive();
     this.voiceGeneration = (this.voiceGeneration || 0) + 1;
     this.invalidateNext();
