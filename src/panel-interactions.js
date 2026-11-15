@@ -38,7 +38,8 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, log = c
         if (!await state.resumePlayback("panel")) await interaction.followUp({ content: "Playback is not paused.", ephemeral: true });
       } else if (action === "pause") {
         if (!await state.pausePlayback("panel")) await interaction.followUp({ content: "Nothing is playing.", ephemeral: true });
-      } else if (action === "next") await state.skip();
+      } else if (action === "previous") await state.previous();
+      else if (action === "next") await state.skip();
       else if (action === "loop") {
         state.loop = ["off", "track", "queue"][(["off", "track", "queue"].indexOf(state.loop) + 1) % 3];
         state.queueChanged();

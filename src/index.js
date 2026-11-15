@@ -134,6 +134,7 @@ class GuildMusic {
   constructor(guild) {
     this.guild = guild;
     this.queue = [];
+    this.history = [];
     this.current = null;
     this.resource = null;
     this.loop = "off";
@@ -565,15 +566,44 @@ class GuildMusic {
     delete endedTrack.http403Retries;
     // Pipeline EOF already requires successful child exit; do not await anything here.
     console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Ended track=${JSON.stringify(endedTrack.title)} position=${playbackPosition(this).toFixed(1)}s duration=${endedTrack.duration}s`);
+    this.rememberPlayed(endedTrack);
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
     await this.playNext(endedTrack);
   }
 
+  rememberPlayed(track) {
+    const { url, title, author, duration, thumbnail, requestedById, autoSuggested } = track;
+    this.history = [...(this.history || []), { url, title, author, duration, thumbnail, requestedById, autoSuggested }].slice(-20);
+  }
+
+  async previous() {
+    if (!this.current) return false;
+    if (playbackPosition(this) > 5 || !this.history?.length) {
+      await this.seek(0);
+      return true;
+    }
+    const previous = this.history.pop();
+    const current = { ...this.current };
+    delete current.resumeAtSeconds;
+    delete current.http403Retries;
+    delete current.streamRetry;
+    const wasPaused = this.player.state.status === AudioPlayerStatus.Paused;
+    this.current = null;
+    this.invalidateNext();
+    this.cancelActive();
+    this.player.stop(true);
+    this.queue.unshift(current);
+    this.pauseOnRestore = wasPaused;
+    await this.playNext(null, { ...previous, resumeAtSeconds: 0 });
+    return true;
+  }
+
   async skip() {
     const skipped = this.current;
     if (!skipped) return false;
+    this.rememberPlayed(skipped);
     this.current = null;
     this.invalidateNext();
     this.cancelActive();

@@ -9,6 +9,7 @@ function fixture(action, channelId = "voice", permissions = 0n) {
     connection: { state: { status: "ready" }, joinConfig: { channelId: "voice" } },
     panel: { wake() {}, scheduleUpdate() { calls.push("update"); } },
     resumePlayback: async () => { calls.push("resume"); return true; }, pausePlayback: async () => { calls.push("pause"); return true; },
+    previous: async () => calls.push("previous"),
     skip: async () => calls.push("skip"), queueChanged: () => calls.push("queueChanged"),
     adjustVolume: amount => calls.push(amount), seek: async position => calls.push(position),
     shuffle: () => calls.push("shuffle"), stop: () => calls.push("stop") };
@@ -18,7 +19,7 @@ function fixture(action, channelId = "voice", permissions = 0n) {
   return { state, interaction, calls, handler: createPanelInteractionHandler({ getMusic: () => state, log() {} }) };
 }
 test("ordinary actions defer first, call existing methods, and schedule panel updates", async () => {
-  for (const [action, expected] of [["play", "resume"], ["pause", "pause"], ["next", "skip"], ["loop", "queueChanged"],
+  for (const [action, expected] of [["play", "resume"], ["previous", "previous"], ["pause", "pause"], ["next", "skip"], ["loop", "queueChanged"],
     ["vol-down", -10], ["vol-up", 10], ["rewind", 0], ["forward", 15], ["shuffle", "shuffle"], ["stop", "stop"]]) {
     const f = fixture(action); await f.handler(f.interaction);
     assert.equal(f.calls[0], "defer", action); assert.equal(f.calls[1], expected, action);

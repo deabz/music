@@ -603,3 +603,35 @@ test("stop during format probing cannot play a stale resource or start a duplica
   await first;
   assert.equal(played, 0); assert.equal(state.current, null);
 });
+
+
+test("history retains the last twenty completed/skipped tracks without stream retry metadata", () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.create(GuildMusic.prototype);
+  for (let i = 0; i < 25; i++) state.rememberPlayed({ title: String(i), url: String(i), http403Retries: 1 });
+  assert.equal(state.history.length, 20);
+  assert.equal(state.history[0].title, "5");
+  assert.ok(!("http403Retries" in state.history[0]));
+});
+
+test("previous restarts after five seconds or without history; otherwise restores history and invalidates prefetch", async () => {
+  const GuildMusic = guildMusicClass();
+  for (const [position, history] of [[6, [{ title: "old" }]], [2, []]]) {
+    const state = Object.create(GuildMusic.prototype);
+    let seek;
+    Object.assign(state, { current: { title: "now", duration: 100 }, history, resource: { playbackDuration: position * 1000 },
+      seek: async value => { seek = value; } });
+    await state.previous(); assert.equal(seek, 0);
+  }
+  const state = Object.create(GuildMusic.prototype);
+  const events = [];
+  Object.assign(state, { current: { title: "now", duration: 100 }, history: [{ title: "old" }], queue: [{ title: "next" }],
+    resource: { playbackDuration: 2000 }, prefetch: { job: { cancel() { events.push("prefetch cancelled"); } } },
+    activePipeline: { cancel() { events.push("active cancelled"); } },
+    player: { state: { status: AudioPlayerStatus.Paused }, stop() { state.onTrackEnd(); } },
+    playNext: async (_, track) => { events.push(track.title); state.current = track; } });
+  await state.previous();
+  assert.deepEqual(events, ["prefetch cancelled", "active cancelled", "old"]);
+  assert.equal(state.current.title, "old"); assert.equal(state.queue[0].title, "now");
+  assert.equal(state.history.length, 0); assert.equal(state.pauseOnRestore, true);
+});
