@@ -102,3 +102,20 @@ hint on this PC and says nothing definitive about Render/Discord voice.
 Startup invokes diagnostics without awaiting it after ClientReady. Checks have a
 60-second overall bound, and mock tests cover unavailable tools, cancellation,
 timeouts, once-only scheduling, disabled configuration and secret redaction.
+
+## Phase 5 documentation and portability
+
+README now lists Docker service settings, every bot environment variable, Secret
+Files, monitoring, ephemeral storage, memory and network limits. The live checklist
+has 29 steps covering all commands and panel controls, permissions, effects,
+transitions, repost and recovery. FEATURE_TEST_MATRIX.md distinguishes automated
+definitions/helpers from actual network smoke results and live-only interactions.
+
+All remaining static PNG/icon/Open Graph routes were requested using the real HTTP
+module and real page exports: every route returned 200. Finalized smoke scripts were
+deleted from the OS temp folder. No owned yt-dlp/FFmpeg smoke children remained.
+Tracked text was checked for machine-local Windows paths and the local username;
+four files were sanitized (three synthetic-path fixtures and the asset generator).
+The generator now uses portable DejaVu font names rather than a Windows font path.
+The earlier effects reports already used relative source references and contained
+no machine-local username/path. All 234 tests and source checks pass at this stage.

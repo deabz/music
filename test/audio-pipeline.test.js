@@ -25,10 +25,10 @@ test("FFmpeg failure diagnostic includes stage, exits, both stderr tails and red
   const fixture = launcher();
   const job = createAudioPipeline({ title: "Track", url: "test" }, { echo: true }, 60, fixture.spawn);
   await job.ready;
-  job.diagnosticSecrets.push("C:\\private\\cookies.txt", "synthetic-token");
-  job.commands[0].args.push("--cookies", "C:\\private\\cookies.txt", "token=synthetic-token");
+  job.diagnosticSecrets.push("fixture/private\\cookies.txt", "synthetic-token");
+  job.commands[0].args.push("--cookies", "fixture/private\\cookies.txt", "token=synthetic-token");
   fixture.calls[0].child.stderr.write("extract tail");
-  fixture.calls[1].child.stderr.write("filter tail C:\\private\\cookies.txt");
+  fixture.calls[1].child.stderr.write("filter tail fixture/private\\cookies.txt");
   fixture.calls[1].child.emit("close", 7, null);
   const text = streamFailureDiagnostic({ guild: { id: "guild" }, activePipeline: job }, { title: "Song" }, job.error);
   const log = JSON.parse(text);

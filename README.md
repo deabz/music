@@ -87,6 +87,72 @@ This updates only the downloader binary, not npm dependencies; stop the bot firs
 YouTube changes frequently, so updating yt-dlp is the first thing to try when downloads start failing.
 
 
+## Deploying on Render
+
+Create one **Web Service** with the **Docker** runtime, repository root as the build
+context, `./Dockerfile` as the Dockerfile path, and `/health` as the health check.
+The image uses Node 22 slim, Python 3, CA certificates, tini and the platform binaries
+installed by `npm ci`. Render provides `PORT`; the server listens on that port on all
+interfaces. The image defaults to 10000 for local Docker use. Do not set NODE_VERSION
+or a separate native build/start command. `render.yaml` is the equivalent Blueprint;
+its existing Starter plan can be changed deliberately in the dashboard. Optional
+sync:false values may be left unset when their feature is unused. Never bake secrets
+into the image. Docker was reviewed statically here; a Linux build still needs checking.
+
+| Environment variable | Required? | Meaning / default |
+| --- | --- | --- |
+| DISCORD_TOKEN | Yes | Bot credential, supplied privately |
+| PORT | Host supplied | Render port; Docker 10000, local 3000 |
+| GUILD_ID | Optional | One-guild command registration; otherwise global |
+| SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET | For Spotify | Metadata matching; neither needed for YouTube |
+| MUSIC_DASHBOARD_TOKEN | For controls | Private random access credential; unset disables dashboard actions |
+| YOUTUBE_COOKIES_FILE | Optional | Read-only Secret File path, copied to private writable temp storage |
+| YTDLP_PROXY | Optional | Proxy URI for every yt-dlp request; treat as a secret |
+| STARTUP_DIAGNOSTICS | Optional | true; false disables the after-ready diagnostics block |
+| VOICE_CHANNEL_ID / VOICE_GUILD_ID | For auto-join | Channel/guild IDs; guild defaults to GUILD_ID |
+| AUTO_JOIN_VOICE | Optional | true in code; Blueprint sets false until configured |
+| DEFAULT_VOLUME | Optional | 80, range 0-200 |
+| LEAVE_ON_EMPTY | Optional | false |
+| EMPTY_CHANNEL_TIMEOUT_SECONDS | Optional | 300 seconds |
+| MAX_QUEUE_SIZE | Optional | 2000, range 1-2000 |
+| TRANSITION_MODE / TRANSITION_SECONDS | Optional | fade / 4 seconds; off disables, crossfade falls back to fade |
+| MUSIC_STATE_FILE | Optional | data/music-state.json |
+| SUPABASE_URL / SUPABASE_SECRET_KEY | For remote snapshots | Endpoint and preferred server-side secret |
+| SUPABASE_SERVICE_ROLE_KEY | Optional legacy | Used only if the preferred Supabase key is absent |
+| NODE_ENV | Optional | production in Docker |
+| RENDER_GIT_COMMIT / GIT_COMMIT | Optional host metadata | Revision in diagnostics; no credentials |
+
+For cookies, create a private Render **Secret File**, for example `youtube-cookies`,
+and set YOUTUBE_COOKIES_FILE to its mounted `/etc/secrets/youtube-cookies` path.
+Do not paste cookie contents into environment variables or Git. The bot copies the
+read-only source into a private writable temporary directory before yt-dlp uses it.
+The original remains untouched. Proxy credentials and cookie paths are redacted.
+
+An optional UptimeRobot HTTP monitor can ping `/health` every five minutes. This is
+monitoring, not an availability guarantee. Free services can sleep/restart and have
+an ephemeral filesystem: `data/music-state.json` and `data/favourites.json` disappear
+on redeploy/restart unless backed by a writable persistent disk. Supabase snapshots
+protect playback state only; favourites still need persistent storage or backups.
+Free instances cannot attach persistent disks. See Render's
+[free-service limitations](https://render.com/docs/free).
+
+Budget carefully for a 512 MB free instance. Each prefetched audio pipeline buffers
+roughly 4 MiB plus child pipes/codec overhead, and FFmpeg, yt-dlp, decoders and multiple
+guilds add substantial memory/CPU. No 512 MB load guarantee was established here.
+
+After ready, one asynchronous `[diagnostics]` block reports tool versions, configured
+flags (never values), gateway HTTPS status, a small YouTube sample and two DNS UDP
+probes. It has a 60-second overall timeout and never blocks readiness. The UDP result
+is **only a hint**, not proof that Discord voice WebSocket/UDP will work. Run
+`npm run selftest` for the same checks without logging into Discord; it does not load
+dotenv. Use `STARTUP_DIAGNOSTICS=false` to disable automatic checks.
+
+YouTube often blocks datacenter IPs; cookies and an optional YTDLP_PROXY may help but
+do not guarantee access. Discord voice needs outbound UDP with a return path, which
+some hosts restrict. A successful gateway login does not prove voice connectivity.
+Run only one bot copy with the same credential: two copies can reply twice, race on
+panels/state and interrupt playback. Complete `LIVE_TEST_CHECKLIST.md` after deployment.
+
 ## Playback diagnostics and autoplay
 
 Player, voice, start, end, and failure logs carry UTC timestamps. Failures include the guild,

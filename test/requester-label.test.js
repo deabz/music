@@ -14,6 +14,6 @@ test("keeps Discord user mentions for user-requested tracks", () => {
 });
 
 test("passes configured YouTube cookies to yt-dlp without requiring them", () => {
-  assert.deepEqual(youtubeCookieOptions(" C:\\private\\cookies.txt "), { cookies: "C:\\private\\cookies.txt" });
+  assert.deepEqual(youtubeCookieOptions(" fixture/private\\cookies.txt "), { cookies: "fixture/private\\cookies.txt" });
   assert.deepEqual(youtubeCookieOptions(""), {});
 });

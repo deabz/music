@@ -9,7 +9,7 @@ test("download failure reasons are classified without leaking raw details", () =
     ["Requested format is not available", "format"], ["HTTP Error 429: Too Many Requests", "rate-limit"],
     ["Connection reset by peer", "network"], ["Request timed out", "network"], ["Unrecognized problem", "unknown"]
   ]) {
-    const result = classifyStreamFailure(detail + " C:\\PRIVATE\\path");
+    const result = classifyStreamFailure(detail + " fixture/PRIVATE\\path");
     assert.equal(result.code, code, detail);
     assert.ok(!result.message.includes("PRIVATE"));
   }

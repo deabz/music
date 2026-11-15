@@ -14,7 +14,7 @@ icon(64).save(root/'favicon.ico',sizes=[(16,16),(32,32),(48,48)])
 icon(180,True).save(root/'apple-touch-icon.png')
 for n in [192,512]:icon(n).save(root/f'icon-{n}.png')
 root.joinpath('favicon.svg').write_text('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><style>path{stroke:#7950b8}@media(prefers-color-scheme:dark){path{stroke:#c8a9ff}}</style><path d="M16 4v24M4 16h24M7.5 7.5l17 17M7.5 24.5l17-17" fill="none" stroke-width="2" stroke-linecap="round"/></svg>''',encoding='utf-8')
-fontpath='C:/Windows/Fonts/seguisb.ttf';regular='C:/Windows/Fonts/segoeui.ttf'
+fontpath='DejaVuSans-Bold.ttf';regular='DejaVuSans.ttf'
 labels={'home':('Good music.','Good company.'),'commands':('A command','away.'),'changelog':('A little','better.'),'status':('In the','loop.'),'dashboard':('Your listening','room.'),'404':('A little','lost?')}
 for key,(line1,line2) in labels.items():
  im=Image.new('RGB',(1200,630),'#101016');d=ImageDraw.Draw(im)
