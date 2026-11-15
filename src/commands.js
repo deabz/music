@@ -159,7 +159,7 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
     });
 
   if (current) {
-    embed.addFields({ name: "Now playing", value: `**${(current.title || "Unknown track").slice(0, 180)}**\n${(current.author || "Unknown artist").slice(0, 120)} · ${playbackStatus} · Played by ${requesterLabel(current)}` });
+    embed.addFields({ name: "Now playing", value: `**${(current.title || "Unknown track").slice(0, 180)}**\n${(current.author || "Unknown artist").slice(0, 120)} Â· ${playbackStatus} Â· Played by ${requesterLabel(current)}` });
   }
   if (!pageTracks.length) {
     embed.setDescription("The queue is empty. Add a song with `/play`.");

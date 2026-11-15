@@ -388,7 +388,7 @@ class GuildMusic {
   }
 
   prepareNext(allowSuggestion = true, sourceTrack = this.current) {
-    if (!sourceTrack) return;
+    if (shuttingDown || !sourceTrack) return;
     const track = this.loop === "track" && this.current ? this.current : this.queue[0]
       || (this.loop === "queue" ? this.current : null);
     if (track) {
@@ -403,6 +403,8 @@ class GuildMusic {
     const generation = this.nextGeneration;
     this.suggestionGeneration = generation;
     const current = sourceTrack;
+    if (current.url) this.autoplayTriedUrls.add(current.url);
+    while (this.autoplayTriedUrls.size > 50) this.autoplayTriedUrls.delete(this.autoplayTriedUrls.values().next().value);
     const controller = new AbortController();
     this.suggestionAbort = controller;
     resolveSuggestedTrack(current, this.autoplayTriedUrls,
@@ -426,7 +428,7 @@ class GuildMusic {
   }
 
   async playNext(endedTrack = null, trackToPlay = null) {
-    if (this.current && this.playing && !trackToPlay) return;
+    if (shuttingDown || (this.current && this.playing && !trackToPlay)) return;
     clearTimeout(this.emptyTimer);
     const next = trackToPlay || this.queue.shift();
     const prepared = !trackToPlay && this.prefetch?.track === next ? this.prefetch.job : null;
@@ -536,7 +538,7 @@ class GuildMusic {
 
   async onTrackEnd() {
     const endedTrack = this.current;
-    if (!endedTrack) return;
+    if (shuttingDown || !endedTrack) return;
     const job = this.activePipeline;
     if (job?.intentionallyAborted) return;
     if (job?.error) return this.failPlayback(endedTrack, job.error);

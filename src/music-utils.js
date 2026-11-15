@@ -57,15 +57,29 @@ const normalizeTitle = (title, artistName) => {
     .trim();
 };
 
-const NON_SONG_TITLE_PATTERN = /\b(?:live(?:\s*stream)?|concert|top\s*\d+|best\s+(?:of|songs?(?:\s+(?:of|from|in)\s+\d{4})?)|greatest\s+hits|playlist|compilation|collection|medley|full\s+album|non[\s-]?stop|mix(?:tape)?|karaoke|reaction|interview|podcast)\b/i;
-
+// Editable autoplay rejection rules, applied to BOTH titles and channel names.
+const AUTOPLAY_REJECT_KEYWORDS = [
+  /\b(?:kids?|children|nursery|baby shark|cocomelon|danny go)\b/i,
+  /\b(?:live(?:\s*stream)?|concert|top\s*\d+|best\s+(?:of|songs?(?:\s+(?:of|from|in)\s+\d{4})?))\b/i,
+  /\b(?:greatest\s+hits|playlist|compilation|collection|medley|full\s+album|non[\s-]?stop|mix(?:tape)?)\b/i,
+  /\b(?:karaoke|reaction|interview|podcast|one\s+hour|\d+\s*(?:hours?|hrs?|minutes?))\b/i
+];
 const isSongResult = result =>
-  Boolean(result.url && result.title) &&
-  !result.isLive &&
-  !NON_SONG_TITLE_PATTERN.test(result.title) &&
-  Number.isFinite(result.durationInSec) &&
-  result.durationInSec > 0 &&
+  Boolean(result.url && result.title) && !result.isLive &&
+  !AUTOPLAY_REJECT_KEYWORDS.some(rule => rule.test(`${result.title} ${result.channel?.name || ""}`)) &&
+  Number.isFinite(result.durationInSec) && result.durationInSec > 0 &&
   result.durationInSec <= MAX_SUGGESTED_TRACK_DURATION_SECONDS;
+
+const artistKey = value => String(value || "").replace(/\s*[-\u2013\u2014]\s*Topic$|VEVO$|\s+Official(?:\s+Channel)?$/i, "")
+  .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function suggestionScore(result, artist, sourceChannel) {
+  const channel = artistKey(result.channel?.name);
+  const name = artistKey(artist);
+  if (!name) return 0;
+  const artistInTitle = (` ${artistKey(result.title)} `).includes(` ${name} `);
+  return (channel === name ? 100 : 0) + (artistInTitle ? 60 : 0)
+    + (channel && channel === artistKey(sourceChannel) ? 40 : 0);
+}
 
 async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undefined) {
   const resultCount = Math.max(1, Math.min(20, Math.floor(limit) || 10));
@@ -95,18 +109,21 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undef
 }
 
 async function resolveSuggestedTrack(track, triedUrls, search, artworkFrom) {
-  const artist = track.author.split(",")[0].trim();
+  const titleArtist = String(track.title || "").split(/\s+[-\u2013\u2014]\s+/);
+  const artist = (titleArtist.length > 1 ? titleArtist[0] : String(track.author || "").split(",")[0])
+    .replace(/\s*[-\u2013\u2014]\s*Topic$|VEVO$|\s+Official(?:\s+Channel)?$/i, "").trim();
   if (!artist) return null;
   const endedTitle = normalizeTitle(track.title, artist);
   const candidates = new Map();
   const errors = [];
 
-  for (const query of [`${artist} similar songs`, `${artist} popular songs`]) {
+  for (const query of [`${artist} official audio`, `${artist} songs`]) {
     try {
       const results = await search(query, { limit: 15, source: { youtube: "video" } });
       for (const result of results) {
-        const normalized = normalizeTitle(result.title || "", result.channel?.name || "");
-        if (!isSongResult(result) || result.url === track.url) continue;
+        const normalized = normalizeTitle(result.title || "", artist);
+        const score = suggestionScore(result, artist, track.author);
+        if (!isSongResult(result) || result.url === track.url || score === 0) continue;
         if (!normalized || normalized === endedTitle || normalized.includes(endedTitle) || endedTitle.includes(normalized)) continue;
         if (!candidates.has(result.url)) {
           candidates.set(result.url, {
@@ -115,7 +132,8 @@ async function resolveSuggestedTrack(track, triedUrls, search, artworkFrom) {
             author: result.channel?.name || artist,
             duration: result.durationInSec,
             thumbnail: artworkFrom(result.thumbnails),
-            autoSuggested: true
+            autoSuggested: true,
+            suggestionScore: score
           });
         }
       }
@@ -126,7 +144,8 @@ async function resolveSuggestedTrack(track, triedUrls, search, artworkFrom) {
     }
   }
 
-  const suggestion = [...candidates.values()].find(candidate => !triedUrls.has(candidate.url));
+  const suggestion = [...candidates.values()].sort((a, b) => b.suggestionScore - a.suggestionScore)
+    .find(candidate => !triedUrls.has(candidate.url));
   if (suggestion) return suggestion;
   if (!candidates.size && errors.length === 2) {
     throw new Error(`Could not search for a suggested song: ${errors.map(error => error.message).join("; ")}`);
@@ -170,4 +189,4 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
   })).filter(entry => entry.url && entry.title && hasAllowedDuration(entry.duration));
 }
 
-module.exports = { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };
+module.exports = { AUTOPLAY_REJECT_KEYWORDS, suggestionScore, MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };

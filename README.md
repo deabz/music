@@ -64,7 +64,7 @@ The bot uses Do Not Disturb presence and listens to the active track title, swit
 
 When the queue runs out after a track finishes, the bot tries distinct YouTube suggestions with verified durations of six minutes or less. Download or audio failures stop playback and preserve the remaining queue, preventing blocked downloads from cycling through repeat or autoplay. `/volume` change the active track immediately as well as setting the level for upcoming tracks.
 
-For YouTube challenge solving, the bot explicitly enables the installed Node runtime and allows yt-dlp to fetch its EJS solver from GitHub. See the [yt-dlp EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS). If Render still reports `HTTP Error 403: Forbidden`, redeploy with a cleared build cache to refresh the yt-dlp binary, then check cookies and the [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). Cookies alone do not resolve every host or token restriction. Audio selection is restricted to WebM Opus to match the voice player's declared input format.
+For YouTube challenge solving, the bot explicitly enables the installed Node runtime and allows yt-dlp to fetch its EJS solver from GitHub. See the [yt-dlp EJS guide](https://github.com/yt-dlp/yt-dlp/wiki/EJS). If Render still reports `HTTP Error 403: Forbidden`, redeploy with a cleared build cache to refresh the yt-dlp binary, then check cookies and the [PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide). Cookies alone do not resolve every host or token restriction. Audio selection prefers WebM Opus and falls back to other audio formats through FFmpeg PCM conversion.
 
 ## Permissions and troubleshooting
 
@@ -85,3 +85,26 @@ Check it without connecting Discord with `npm run ytdlp-version`.
 Update that same executable with `npm run update-ytdlp` (Windows supported).
 This updates only the downloader binary, not npm dependencies; stop the bot first.
 YouTube changes frequently, so updating yt-dlp is the first thing to try when downloads start failing.
+
+
+## Playback diagnostics and autoplay
+
+Player, voice, start, end, and failure logs carry UTC timestamps. Failures include the guild,
+track, a classified reason, and the last 2,000 characters of downloader stderr in the host log;
+Discord receives only the short reason. HTTP 403 gets one automatic retry. Other identified
+download errors do not retry; an unexplained audio ending within three seconds retains the
+short-stream retry policy. Repeated short-stream failures stop with the remaining queue preserved.
+Pipe errors from intentional cancellation are silent. A pipe closure within five seconds of the
+expected end is treated as natural completion; earlier closures remain failures.
+
+Next audio is prefetched when the current player reaches Playing, with one speculative pipeline
+per server. Its PassThrough uses a 2 MiB high-water mark on each side (roughly 4 MiB plus pipe and
+codec overhead). Queued audio uses the same effects, probing, inline volume and downloader options
+as normal playback. A small prefix of the actual stream is probed: WebM Opus uses the fast path;
+other formats are converted by FFmpeg to 48 kHz stereo signed 16-bit PCM. This reduces transition
+latency but cannot guarantee sample-perfect gapless playback or avoid buffering on slow networks.
+
+Autoplay prefers the previous artist/title and channel. Edit `AUTOPLAY_REJECT_KEYWORDS` in
+`src/music-utils.js` to change rejection rules for kids content and non-song results. Unrelated
+results are rejected even if no alternative remains. These are metadata heuristics, not a genre
+classifier. Recent suggestion URLs are tracked in memory for the current session.
