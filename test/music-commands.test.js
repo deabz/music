@@ -234,10 +234,11 @@ test("special-character titles survive effect restart and stale resource Idle ca
   assert.equal(f.state.resource, resource); assert.equal(f.state.playing, true); f.state.stop();
 });
 
-test("clean early EOF advances without waiting for metadata; short-stream detection uses real audio", async () => {
+test("clean early EOF resumes at delivered position; short-stream detection uses real audio", async () => {
   const f = transitionFixture(); f.state.resource.playbackDuration = 10000;
   f.state.activePipeline = { sourceEnded: true, outputDone: true, children: [{ pipelineClosed: true }], cancel() {} };
-  await f.state.onTrackEnd(); assert.equal(f.state.current.title, "Next"); f.state.stop();
+  await f.state.onTrackEnd(); assert.equal(f.state.current.title, "Current");
+  assert.equal(f.state.resumeOffsetSeconds, 10); assert.equal(f.state.current.earlyResumes, 1); f.state.stop();
   const short = transitionFixture(); short.state.resource.playbackDuration = 1000;
   short.state.activePipeline = { startedAt: 1, cancel() {} };
   short.state.transitions.gain = 0; assert.equal(short.state.isShortStream(), true);
@@ -686,7 +687,7 @@ test("instant Idle retries once, notifies, advances and limits consecutive failu
   const starts = [];
   state.playNext = async (_, track) => { starts.push(track || state.queue.shift()); };
   const short = retry => {
-    state.current = { title: "short", duration: 180, streamRetry: retry };
+    state.current = { title: "short", duration: 180, streamRetry: retry, earlyResumes: 2 };
     state.activePipeline = { startedAt: 1, cancel() { cancels++; } };
     state.resource = { playbackDuration: 100 };
   };

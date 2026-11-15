@@ -588,7 +588,6 @@ class GuildMusic {
       if (recoverable) job.onFailure = error => {
         if (active() && !job.intentionallyAborted) {
           if (this.restartTransaction) job.restartError = error;
-          else if (this.restartRecovery) void this.rollbackRestart(error);
           else this.failPlayback(next, error);
         }
       };
@@ -604,10 +603,57 @@ class GuildMusic {
     }
   }
 
-  failPlayback(track, error) {
+  canResumeEarly(track, error) {
+    const reason = classifyStreamFailure([this.activePipeline?.stderr, this.activePipeline?.filterStderr, error?.message].filter(Boolean).join("\n"));
+    return track && this.current === track && !this.restartTransaction && !this.activePipeline?.intentionallyAborted
+      && !["unavailable", "sign-in", "format", "rate-limit"].includes(reason.code)
+      && Number.isFinite(track.duration) && playbackPosition(this) < track.duration - NATURAL_END_TOLERANCE_SECONDS
+      && (this.resource?.playbackDuration || 0) > 0 && (track.earlyResumes || 0) < 2;
+  }
+
+  resumeEarlyEnd(track, error) {
+    if (this.earlyResumePromise) return this.earlyResumePromise;
+    const operation = this.restartTransaction = {};
+    const position = playbackPosition(this);
+    const paused = this.player.state?.status === AudioPlayerStatus.Paused || this.pauseOnRestore;
+    const recovery = this.restartRecovery;
+    const run = async () => {
+      let failure = error;
+      try {
+        while ((track.earlyResumes || 0) < 2 && this.restartTransaction === operation) {
+          track.earlyResumes = (track.earlyResumes || 0) + 1;
+          console.error(`[stream-resume] ${streamFailureDiagnostic(this, track, failure)} position=${position} attempt=${track.earlyResumes}/2`);
+          this.current = null;
+          this.invalidateNext(); this.cancelActive(); this.player.stop(true);
+          this.pauseOnRestore = paused;
+          try {
+            await this.playNext(null, { ...track, resumeAtSeconds: position }, { recoverable: true });
+            if (this.restartTransaction !== operation) return;
+            if (recovery) { recovery.track = this.current; this.restartRecovery = recovery; }
+            return;
+          } catch (nextError) {
+            failure = nextError;
+            const reason = classifyStreamFailure([this.activePipeline?.stderr, this.activePipeline?.filterStderr, nextError.message].filter(Boolean).join("\n"));
+            if (["unavailable", "sign-in", "format", "rate-limit"].includes(reason.code)) break;
+          }
+        }
+        if (this.restartTransaction === operation) {
+          this.restartTransaction = null;
+          return this.failPlayback(this.current, failure, { allowResume: false });
+        }
+      } finally {
+        if (this.restartTransaction === operation) this.restartTransaction = null;
+      }
+    };
+    const pending = run();
+    this.earlyResumePromise = pending.finally(() => { this.earlyResumePromise = null; });
+    return this.earlyResumePromise;
+  }
+
+  failPlayback(track, error, { allowResume = true } = {}) {
     if (!track || this.current !== track) return;
     console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
-    const detail = this.activePipeline?.stderr || error.stderr || error.message;
+    const detail = [this.activePipeline?.stderr, this.activePipeline?.filterStderr, error.stderr, error.message].filter(Boolean).join("\n");
     const reason = classifyStreamFailure(detail);
     if (reason.code === "403" && !track.http403Retries) {
       const position = playbackPosition(this);
@@ -619,6 +665,8 @@ class GuildMusic {
       this.pauseOnRestore = wasPaused;
       return this.playNext(null, { ...track, http403Retries: 1, resumeAtSeconds: position });
     }
+    if (allowResume && this.canResumeEarly(track, error)) return this.resumeEarlyEnd(track, error);
+    if (this.restartRecovery && !this.restartTransaction) return this.rollbackRestart(error);
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
     // Stop before emitting Idle, so errors cannot enter repeat or autoplay.
@@ -640,7 +688,7 @@ class GuildMusic {
 
   retryShortStream(track, error) {
     console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
-    const detail = this.activePipeline?.stderr || error.stderr || error.message;
+    const detail = [this.activePipeline?.stderr, this.activePipeline?.filterStderr, error.stderr, error.message].filter(Boolean).join("\n");
     const reason = classifyStreamFailure(detail);
     const retry = track.streamRetry || 0;
     this.current = null; // Ignore Idle emitted by intentional player.stop().
@@ -672,23 +720,20 @@ class GuildMusic {
     this.transitions?.cancel();
     const job = this.activePipeline;
     if (job?.intentionallyAborted) return;
-    if (job?.error) return this.restartRecovery ? this.rollbackRestart(job.error) : this.failPlayback(endedTrack, job.error);
-    if (this.restartRecovery && playbackPosition(this) < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
-      return this.rollbackRestart(new Error("Restarted stream ended early."));
-    }
-    if (this.isShortStream()) return this.retryShortStream(endedTrack, new Error("Audio ended within three seconds."));
+    if (job?.error) return this.failPlayback(endedTrack, job.error);
     const position = playbackPosition(this);
-    // A successful pipeline EOF can expose inaccurate duration metadata. Never
-    // wait for a fade deadline after the real audio has already ended.
-    const cleanEof = config.transitionMode !== "off" && job?.sourceEnded && job?.outputDone
-      && job?.children?.every(child => child.pipelineClosed) && !job.error;
-    if (!cleanEof && Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
-      return this.failPlayback(endedTrack, new Error(`Audio ended early at ${position.toFixed(1)}s of ${endedTrack.duration}s.`));
+    if (Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
+      const error = new Error(`Audio ended early at ${position.toFixed(1)}s of ${endedTrack.duration}s.`);
+      if (this.canResumeEarly(endedTrack, error)) return this.resumeEarlyEnd(endedTrack, error);
+      if (this.restartRecovery) return this.rollbackRestart(error);
+      if (this.isShortStream()) return this.retryShortStream(endedTrack, error);
+      return this.failPlayback(endedTrack, error, { allowResume: false });
     }
     if (job) job.naturalAudioEnd = true;
     this.shortStreamFailures = 0;
     delete endedTrack.streamRetry;
     delete endedTrack.http403Retries;
+    delete endedTrack.earlyResumes;
     // Pipeline EOF already requires successful child exit; do not await anything here.
     console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Ended track=${JSON.stringify(endedTrack.title)} position=${playbackPosition(this).toFixed(1)}s duration=${endedTrack.duration}s`);
     this.rememberPlayed(endedTrack);
