@@ -11,10 +11,10 @@ test("suggestion searches are cached per track and stale responses cannot change
   await new Promise(setImmediate); assert.equal(searches, 1);
   state.current = two; const second = cache.load(two);
   await new Promise(setImmediate);
-  pending.get("one")([{ title: "stale", url: "stale" }]); await first;
+  pending.get("one")([{ title: "stale", url: "stale", author: "Artist", duration: 180 }]); await first;
   assert.equal(state.panelSuggestions, null);
-  pending.get("two")([{ title: "fresh", url: "fresh" }]); await second;
-  assert.equal(state.panelSuggestions[0].title, "fresh"); assert.equal(updates, 1);
+  pending.get("two")([{ title: "fresh", url: "fresh", author: "Artist", duration: 180 }]); await second;
+  assert.equal(state.panelSuggestions[0].title, "fresh"); assert.equal(updates, 2);
   cache.load(two); assert.equal(searches, 2);
   const id = state.panelSuggestions[0].id;
   assert.ok(id.length < 30);
@@ -29,7 +29,7 @@ test("stopping aborts pending suggestions and select options obey Discord limits
   const pending = cache.load(state.current); await new Promise(setImmediate);
   cache.clearActive(); resolve([{ title: "late" }]); await pending;
   assert.equal(signal.aborted, true); assert.deepEqual(state.panelSuggestions, []);
-  const ready = new PanelSuggestions(state, { search: async () => Array.from({ length: 20 }, (_, index) => ({ title: "x".repeat(150), author: "a".repeat(150), url: String(index), duration: 180 })) });
+  const ready = new PanelSuggestions(state, { search: async () => Array.from({ length: 20 }, (_, index) => ({ title: "x".repeat(140) + index, author: "Artist " + index % 3, url: String(index), duration: 180 })) });
   await ready.load(state.current);
   const options = buildPlayerPanel(state).components[0].components[0].options;
   assert.equal(options.length, PANEL_SUGGESTION_COUNT); assert.equal(new Set(options.map(item => item.value)).size, PANEL_SUGGESTION_COUNT);

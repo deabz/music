@@ -382,6 +382,7 @@ class GuildMusic {
     await this.connect(voiceChannel);
     if (this.queue.length + items.length > config.maxQueueSize) throw new Error("The queue is full.");
     this.queue.push(...items.map(({ panelInstanceId, ...track }) => ({ ...track, requestedById: requesterId })));
+    this.suggestions?.refresh?.();
     this.autoplayTriedUrls.clear();
     if (!this.notificationChannelId) this.notificationChannelId = notificationChannel?.id || null;
     if (this.playing) this.prepareNext();
@@ -482,6 +483,7 @@ class GuildMusic {
 
   queueChanged() {
     this.invalidateNext();
+    this.suggestions?.refresh?.();
     scheduleMusicSave();
     if (this.current) this.prepareNext(false);
   }
@@ -514,7 +516,7 @@ class GuildMusic {
     const suggestionTask = this.suggestions
       ? this.suggestions.candidates(current).then(items => chooseAutoplayCandidate(items, this, current))
       : resolveSuggestedTrack(current, this.autoplayTriedUrls,
-        (query, options) => searchYouTube(query, options.limit, undefined, controller.signal), artworkFrom);
+        (query, options) => searchYouTube(query, options.limit, undefined, controller.signal), artworkFrom, this);
     suggestionTask
       .then(suggestion => {
         if (!suggestion || generation !== this.nextGeneration || (this.current && this.current !== current) || this.queue.length
@@ -1025,6 +1027,7 @@ async function resolveQuery(query) {
       title: info.video_details.title,
       author: info.video_details.channel?.name || "YouTube",
       duration: info.video_details.durationInSec,
+      tags: info.video_details.tags, categories: info.video_details.categories, genre: info.video_details.genre,
       thumbnail: artworkFrom(info.video_details.thumbnails)
     }];
   }
@@ -1036,6 +1039,7 @@ async function resolveQuery(query) {
     title: match.title,
     author: match.channel?.name || "YouTube",
     duration: match.durationInSec,
+    tags: match.tags, categories: match.categories, genre: match.genre,
     thumbnail: artworkFrom(match.thumbnails)
   }];
 }

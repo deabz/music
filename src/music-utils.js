@@ -4,6 +4,7 @@ const ytdlp = require("youtube-dl-exec");
 const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
+const { hasVersion } = require("./song-identity");
 let writableYouTubeCookiesFile = null;
 
 // Node is already installed on every bot host; yt-dlp does not enable it by default.
@@ -44,19 +45,6 @@ const formatYtdlpTime = seconds => {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
 };
 
-const normalizeTitle = (title, artistName) => {
-  const prefix = `${artistName} - `;
-  const withoutArtist = title.toLowerCase().startsWith(prefix.toLowerCase())
-    ? title.slice(prefix.length)
-    : title;
-  return withoutArtist
-    .replace(/\s*[\[(]?\s*(?:ft|feat|featuring)\b[\s\S]*$/i, "")
-    .replace(/\s*\([^)]*\)$/i, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-};
-
 // Editable autoplay rejection rules, applied to BOTH titles and channel names.
 const AUTOPLAY_REJECT_KEYWORDS = [
   /\b(?:kids?|children|nursery|baby shark|cocomelon|danny go)\b/i,
@@ -66,20 +54,10 @@ const AUTOPLAY_REJECT_KEYWORDS = [
 ];
 const isSongResult = result =>
   Boolean(result.url && result.title) && !result.isLive &&
+  !hasVersion(`${result.title} ${result.channel?.name || ""}`) &&
   !AUTOPLAY_REJECT_KEYWORDS.some(rule => rule.test(`${result.title} ${result.channel?.name || ""}`)) &&
-  Number.isFinite(result.durationInSec) && result.durationInSec > 0 &&
+  Number.isFinite(result.durationInSec) && result.durationInSec >= 60 &&
   result.durationInSec <= MAX_SUGGESTED_TRACK_DURATION_SECONDS;
-
-const artistKey = value => String(value || "").replace(/\s*[-\u2013\u2014]\s*Topic$|VEVO$|\s+Official(?:\s+Channel)?$/i, "")
-  .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-function suggestionScore(result, artist, sourceChannel) {
-  const channel = artistKey(result.channel?.name);
-  const name = artistKey(artist);
-  if (!name) return 0;
-  const artistInTitle = (` ${artistKey(result.title)} `).includes(` ${name} `);
-  return (channel === name ? 100 : 0) + (artistInTitle ? 60 : 0)
-    + (channel && channel === artistKey(sourceChannel) ? 40 : 0);
-}
 
 async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undefined) {
   const resultCount = Math.max(1, Math.min(20, Math.floor(limit) || 10));
@@ -97,6 +75,7 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undef
   return entries.map(entry => ({
     url: entry.webpage_url || entry.original_url || entry.url || (entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : null),
     title: entry.title,
+    tags: Array.isArray(entry.tags) ? entry.tags : [], categories: Array.isArray(entry.categories) ? entry.categories : [], genre: entry.genre,
     channel: { name: entry.channel || entry.uploader || entry.creator || "YouTube" },
     durationInSec: Number.isFinite(entry.duration) ? entry.duration : null,
     isLive: entry.is_live === true || (entry.live_status != null && entry.live_status !== "not_live"),
@@ -108,50 +87,16 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undef
   })).filter(entry => entry.url && entry.title);
 }
 
-async function resolveSuggestedTracks(track, triedUrls, search, artworkFrom) {
-  const titleArtist = String(track.title || "").split(/\s+[-\u2013\u2014]\s+/);
-  const artist = (titleArtist.length > 1 ? titleArtist[0] : String(track.author || "").split(",")[0])
-    .replace(/\s*[-\u2013\u2014]\s*Topic$|VEVO$|\s+Official(?:\s+Channel)?$/i, "").trim();
-  if (!artist) return [];
-  const endedTitle = normalizeTitle(track.title, artist);
-  const candidates = new Map();
-  const errors = [];
-
-  for (const query of [`${artist} official audio`, `${artist} songs`]) {
-    try {
-      const results = await search(query, { limit: 15, source: { youtube: "video" } });
-      for (const result of results) {
-        const normalized = normalizeTitle(result.title || "", artist);
-        const score = suggestionScore(result, artist, track.author);
-        if (!isSongResult(result) || result.url === track.url || score === 0) continue;
-        if (!normalized || normalized === endedTitle || normalized.includes(endedTitle) || endedTitle.includes(normalized)) continue;
-        if (!candidates.has(result.url)) {
-          candidates.set(result.url, {
-            url: result.url,
-            title: result.title,
-            author: result.channel?.name || artist,
-            duration: result.durationInSec,
-            thumbnail: artworkFrom(result.thumbnails),
-            autoSuggested: true,
-            suggestionScore: score
-          });
-        }
-      }
-    } catch (error) {
-      if (error.name === "AbortError") throw error;
-      errors.push(error);
-      console.error(`[autoplay] Search failed for "${query}": ${error.message}`);
-    }
-  }
-
-  const suggestions = [...candidates.values()].sort((a, b) => b.suggestionScore - a.suggestionScore)
-    .filter(candidate => !triedUrls.has(candidate.url)).slice(0, 10);
-  if (!suggestions.length && !candidates.size && errors.length === 2) {
-    throw new Error(`Could not search for suggested songs: ${errors.map(error => error.message).join("; ")}`);
-  }
-  return suggestions;
+async function resolveSuggestedTracks(track, triedUrls, search, artworkFrom, suppliedState) {
+  const { AutoplayCandidates } = require("./autoplay-candidates");
+  const state = suppliedState || { current: track, queue: [], autoplayTriedUrls: triedUrls };
+  const provider = new AutoplayCandidates(state, { mix: async () => [],
+    search: (query, limit, unused, signal) => search(query, { limit, signal }) });
+  try {
+    return (await provider.list(track, state.suggestionAbort?.signal)).map(item => ({ ...item,
+      thumbnail: artworkFrom?.(item.thumbnails) || item.thumbnail }));
+  } finally { provider.dispose(); }
 }
-
 async function resolveSuggestedTrack(...args) {
   return (await resolveSuggestedTracks(...args))[0] || null;
 }
@@ -189,4 +134,4 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
   })).filter(entry => entry.url && entry.title && hasAllowedDuration(entry.duration));
 }
 
-module.exports = { AUTOPLAY_REJECT_KEYWORDS, suggestionScore, MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, resolveSuggestedTracks, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };
+module.exports = { AUTOPLAY_REJECT_KEYWORDS, MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, resolveSuggestedTracks, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };
