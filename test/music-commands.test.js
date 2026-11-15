@@ -36,6 +36,7 @@ function commandHandler(state, overrides = {}) {
     startupComplete: true, shuttingDown: false,
     getMusic: () => state,
     musicAccessError: () => null,
+    resolveMemberVoiceChannel: async interaction => interaction.member?.voice?.channel,
     ChannelType: require("discord.js").ChannelType,
     reply: (interaction, content) => interaction.reply(content),
     formatDuration,

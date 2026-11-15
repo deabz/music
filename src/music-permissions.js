@@ -4,6 +4,10 @@ const controls = new Set(["pause", "resume", "skip", "stop", "leave", "clear", "
 function currentVoiceChannelId(interaction) {
   return interaction.guild?.voiceStates?.cache?.get(interaction.user?.id)?.channelId || null;
 }
+async function resolveMemberVoiceChannel(interaction) {
+  const channelId = currentVoiceChannelId(interaction);
+  return channelId ? interaction.guild.channels.fetch(channelId) : null;
+}
 function botVoiceChannelId(state) {
   const connection = state?.connection;
   return connection?.state?.status !== "destroyed" ? connection?.joinConfig?.channelId || null : null;
@@ -25,4 +29,4 @@ function musicAccessError(interaction, state, command = interaction.commandName)
   }
   return null;
 }
-module.exports = { musicAccessError, playbackControlError, currentVoiceChannelId };
+module.exports = { musicAccessError, playbackControlError, currentVoiceChannelId, resolveMemberVoiceChannel };

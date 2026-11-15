@@ -4,8 +4,8 @@ const { PANEL_PREFIX, buildEffectsMenu, buildFavouritesMenu } = require("./playe
 
 const ACTION_PERMISSIONS = {
   play: "resume", previous: "forward", pause: "pause", next: "skip", loop: "loop",
-  "vol-down": "voldown", rewind: "forward", favourite: "volume", forward: "forward", "vol-up": "volup",
-  "favourites-select": "volume", "effects-apply": "echo", lyrics: "forward", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "volume", suggest: "volume"
+  "vol-down": "voldown", rewind: "forward", favourite: "read-only", forward: "forward", "vol-up": "volup",
+  "favourites-select": "volume", "effects-apply": "echo", lyrics: "read-only", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "read-only", suggest: "volume"
 };
 const privateReply = (interaction, content) => interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
 function createPanelInteractionHandler({ getMusic, isReady = () => true, favourites, lyrics, log = console.error } = {}) {
@@ -24,7 +24,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
     const permission = ACTION_PERMISSIONS[action];
     if (!permission) { await privateReply(interaction, "This player control is unavailable."); return true; }
     const state = getMusic(interaction.guild);
-    const denied = action === "lyrics" ? null : musicAccessError(interaction, state, permission);
+    const denied = musicAccessError(interaction, state, permission);
     if (denied) { await privateReply(interaction, denied); return true; }
     if (!temporary && state.panelMessageId && interaction.message?.id !== state.panelMessageId) {
       await privateReply(interaction, "This is an old panel. Use /nowplaying to bring back the current player.");
@@ -47,6 +47,8 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
     }
     await interaction.deferUpdate();
     try {
+      const denied = musicAccessError(interaction, state, permission);
+      if (denied) { await interaction.followUp({ content: denied, ephemeral: true, allowedMentions: { parse: [] } }); return true; }
       if (action === "favourite") {
         if (!state.current) throw new Error("Nothing is playing.");
         const result = await favourites.toggle(interaction.user.id, state.current);
@@ -61,8 +63,10 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
         if (!track) {
           await interaction.followUp({ content: "That favourite is no longer available.", ephemeral: true }); return true;
         }
-        const channelId = state.connection?.joinConfig.channelId || interaction.member?.voice?.channelId;
+        const channelId = state.connection?.joinConfig?.channelId;
         const voiceChannel = await interaction.guild.channels.fetch(channelId);
+        const denied = musicAccessError(interaction, state, permission);
+        if (denied) { await interaction.followUp({ content: denied, ephemeral: true }); return true; }
         const { id, ...song } = track;
         await state.add([{ ...song, autoSuggested: false }], voiceChannel, interaction.user.id, interaction.channel);
         await interaction.editReply({ content: `Added ${song.title.slice(0, 100)}.`, components: [], allowedMentions: { parse: [] } });
@@ -73,8 +77,10 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
           return true;
         }
         try {
-          const channelId = state.connection?.joinConfig.channelId || interaction.member?.voice?.channelId;
+          const channelId = state.connection?.joinConfig?.channelId;
           const voiceChannel = await interaction.guild.channels.fetch(channelId);
+          const denied = musicAccessError(interaction, state, permission);
+          if (denied) { state.suggestions.restore(selected); await interaction.followUp({ content: denied, ephemeral: true }); return true; }
           const { id, ...track } = selected;
           await state.add([{ ...track, autoSuggested: false }], voiceChannel, interaction.user.id, interaction.channel);
           await interaction.followUp({ content: `Added ${selected.title.slice(0, 100)}.`, ephemeral: true, allowedMentions: { parse: [] } });

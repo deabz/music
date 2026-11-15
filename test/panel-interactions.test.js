@@ -29,7 +29,7 @@ test("ordinary actions defer first, call existing methods, and schedule panel up
   for (const mode of ["track", "queue", "off"]) { await f.handler(f.interaction); assert.equal(f.state.loop, mode); }
 });
 test("playback panel controls require voice access even for Manage Server/Admin", async () => {
-  for (const action of Object.keys(ACTION_PERMISSIONS).filter(action => action !== "lyrics")) {
+  for (const action of Object.keys(ACTION_PERMISSIONS).filter(action => !["lyrics", "favourite", "favourites"].includes(action))) {
     const f = fixture(action, "elsewhere");
     if (["effects-apply", "favourites-select"].includes(action)) f.interaction.customId += ":listener"; await f.handler(f.interaction);
     assert.equal(f.calls.length, 1, action); assert.equal(f.calls[0].ephemeral, true);

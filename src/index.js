@@ -12,7 +12,7 @@ const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECO
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
-const { musicAccessError } = require("./music-permissions");
+const { musicAccessError, resolveMemberVoiceChannel } = require("./music-permissions");
 const { createSpotifyClient, matchSpotifyTracks } = require("./spotify");
 const {
   buildHelpEmbed,
@@ -933,14 +933,15 @@ const handleCommand = async interaction => {
       return reply(interaction, `Echo is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "play") {
-      const memberChannel = interaction.member.voice?.channel;
+      let memberChannel = await resolveMemberVoiceChannel(interaction);
       if (!memberChannel) return reply(interaction, { content: "Join a voice channel first.", ephemeral: true });
       await interaction.deferReply({ ephemeral: true });
       const query = interaction.options.getString("query", true);
       const tracks = await resolveQuery(query);
       if (!tracks.length) return interaction.editReply("No playable tracks were found.");
+      memberChannel = await resolveMemberVoiceChannel(interaction);
       const accessError = musicAccessError(interaction, state);
-      if (accessError) return interaction.editReply(accessError);
+      if (accessError || !memberChannel) return interaction.editReply(accessError || "Join a voice channel first.");
       await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
       await state.panel.ensure(interaction.channel.id);
       // Finish the private deferral before creating a separate public follow-up.
@@ -963,14 +964,19 @@ const handleCommand = async interaction => {
       return reply(interaction, `Notification channel set to ${channel}.`);
     }
     if (interaction.commandName === "join") {
-      await interaction.deferReply();
-      await state.connect(interaction.member.voice?.channel);
+      await interaction.deferReply({ ephemeral: true });
+      const channel = await resolveMemberVoiceChannel(interaction);
+      const denied = musicAccessError(interaction, state);
+      if (denied || !channel) return interaction.editReply(denied || "Join a voice channel first.");
+      await state.connect(channel);
       return interaction.editReply("Connected to your voice channel.");
     }
     if (interaction.commandName === "247") {
       if (!config.voiceChannelId || !config.voiceGuildId) return reply(interaction, "Set VOICE_CHANNEL_ID and VOICE_GUILD_ID in .env first.");
-      await interaction.deferReply();
+      await interaction.deferReply({ ephemeral: true });
       const channel = await interaction.guild.channels.fetch(config.voiceChannelId);
+      const denied = musicAccessError(interaction, state);
+      if (denied) return interaction.editReply(denied);
       await state.connect(channel);
       return interaction.editReply("Connected to the configured 24/7 voice channel.");
     }
@@ -1107,7 +1113,7 @@ const handleCommand = async interaction => {
             const result = results[i.values[0]];
             if (!result) throw new Error("That search result is no longer available.");
             const track = { url: result.url, title: result.title, author: result.channel?.name || "Unknown", duration: result.durationInSec, thumbnail: result.thumbnails?.[0]?.url };
-            const memberChannel = i.member.voice?.channel;
+            const memberChannel = await resolveMemberVoiceChannel(i);
             if (!memberChannel) return await i.reply({ content: "Join a voice channel first.", ephemeral: true });
 
             const accessError = musicAccessError(i, state, "play");
