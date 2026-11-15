@@ -487,3 +487,20 @@ test("skipping last track schedules cancellable autoplay without waiting", async
   await new Promise(setImmediate);
   assert.equal(state.queue.length, 0);
 });
+
+
+test("queue numbers are waiting positions across pages, current appears separately", () => {
+  const { buildQueueEmbed, buildQueueComponents } = require("../src/commands");
+  const queue = Array.from({ length: 11 }, (_, index) => ({ title: "waiting " + (index + 1), author: "Artist" }));
+  const current = { title: "current", author: "Artist" };
+  const first = buildQueueEmbed({ current, queue, playbackStatus: "playing" }).toJSON();
+  assert.equal(first.fields[0].name, "Now playing");
+  assert.match(first.fields[0].value, /current/);
+  assert.match(first.description, /\*\*#1\*\*\n\*\*waiting 1\*\*/);
+  assert.match(first.description, /#10/); assert.ok(!first.description.includes("#11"));
+  const second = buildQueueEmbed({ current, queue, page: 1 }).toJSON();
+  assert.match(second.description, /#11/);
+  assert.match(second.description, /waiting 11/);
+  const buttons = buildQueueComponents({ current, queue: queue.slice(0, 10) })[0].toJSON();
+  assert.equal(buttons.components[1].disabled, true);
+});

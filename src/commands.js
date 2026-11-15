@@ -143,13 +143,8 @@ const requesterLabel = track => {
   return `<@${requesterId}>`;
 };
 
-const queueTracks = (current, queue, playbackStatus) => [
-  ...(current ? [{ ...current, isCurrent: true, playbackStatus }] : []),
-  ...queue.map(track => ({ ...track, isCurrent: false }))
-];
-
 const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
-  const tracks = queueTracks(current, queue, playbackStatus);
+  const tracks = queue;
   const pageCount = Math.max(1, Math.ceil(tracks.length / QUEUE_PAGE_SIZE));
   const currentPage = Math.max(0, Math.min(page, pageCount - 1));
   const pageTracks = tracks.slice(currentPage * QUEUE_PAGE_SIZE, (currentPage + 1) * QUEUE_PAGE_SIZE);
@@ -161,6 +156,9 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
       text: `${tracks.length} track${tracks.length === 1 ? "" : "s"} â€¢ Page ${currentPage + 1}/${pageCount}`
     });
 
+  if (current) {
+    embed.addFields({ name: "Now playing", value: `**${(current.title || "Unknown track").slice(0, 180)}**\n${(current.author || "Unknown artist").slice(0, 120)} · ${playbackStatus} · Played by ${requesterLabel(current)}` });
+  }
   if (!pageTracks.length) {
     embed.setDescription("The queue is empty. Add a song with `/play`.");
   } else {
@@ -179,7 +177,7 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
 };
 
 const buildQueueComponents = ({ current, queue, page = 0 }) => {
-  const pageCount = Math.max(1, Math.ceil(queueTracks(current, queue, "playing").length / QUEUE_PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(queue.length / QUEUE_PAGE_SIZE));
   return [new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("queue:previous")

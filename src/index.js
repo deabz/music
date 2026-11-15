@@ -670,7 +670,7 @@ async function replyWithQueue(context, state) {
       return;
     }
     page += component.customId === "queue:next" ? 1 : -1;
-    const pageCount = Math.max(1, Math.ceil((state.queue.length + (state.current ? 1 : 0)) / 10));
+    const pageCount = Math.max(1, Math.ceil(state.queue.length / QUEUE_PAGE_SIZE));
     page = Math.max(0, Math.min(page, pageCount - 1));
     await component.update(queuePayload());
   });
