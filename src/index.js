@@ -3,6 +3,7 @@ require("dotenv").config();
 const storage = require("./storage");
 const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
+const { createSpotifyClient, matchSpotifyTracks } = require("./spotify");
 const ytdlp = require("youtube-dl-exec");
 const {
   buildHelpEmbed,
@@ -746,71 +747,9 @@ async function postLiveNowPlaying(context, state, options = {}) {
   return message;
 }
 
-async function spotifyToken() {
-  if (!config.spotifyClientId || !config.spotifyClientSecret) {
-    throw new Error("Spotify support needs SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in .env.");
-  }
-  const auth = Buffer.from(`${config.spotifyClientId}:${config.spotifyClientSecret}`).toString("base64");
-  const response = await fetch("https://accounts.spotify.com/api/token", {
-    method: "POST",
-    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body: "grant_type=client_credentials"
-  });
-  if (!response.ok) throw new Error("Spotify authentication failed. Check your Spotify API credentials.");
-  return (await response.json()).access_token;
-}
+const spotify = createSpotifyClient(config);
 
-async function limitConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let index = 0;
-  async function worker() {
-    while (index < items.length) {
-      const currentIndex = index++;
-      results[currentIndex] = await fn(items[currentIndex], currentIndex);
-    }
-  }
-  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
-  await Promise.all(workers);
-  return results;
-}
-
-async function spotifyItems(url) {
-  const token = await spotifyToken();
-  const match = url.match(/open\.spotify\.com\/(track|album|playlist)\/([a-zA-Z0-9]+)/);
-  if (!match) throw new Error("That Spotify link is not a supported track, album, or playlist.");
-  const [, type, id] = match;
-  const endpoint = type === "track" ? `tracks/${id}` : `${type}s/${id}/tracks?limit=100`;
-  const headers = { Authorization: `Bearer ${token}` };
-  let tracks = [];
-  if (type === "track") {
-    const response = await fetch(`https://api.spotify.com/v1/${endpoint}`, { headers });
-    if (!response.ok) throw new Error("Spotify could not provide metadata for that link.");
-    tracks = [await response.json()];
-  } else {
-    let next = `https://api.spotify.com/v1/${endpoint}`;
-    while (next) {
-      const response = await fetch(next, { headers });
-      if (!response.ok) throw new Error("Spotify could not provide metadata for that link.");
-      const data = await response.json();
-      tracks.push(...(data.items || []).map(item => item.track || item).filter(Boolean));
-      if (tracks.length > config.maxQueueSize) {
-        throw new Error(`That Spotify playlist or album exceeds the ${config.maxQueueSize}-track queue limit. Increase MAX_QUEUE_SIZE to load the whole release.`);
-      }
-      next = data.next;
-    }
-  }
-  return tracks
-    .filter(track => hasAllowedDuration(track.duration_ms ? track.duration_ms / 1000 : NaN))
-    .map(track => ({
-    title: track.name,
-    author: track.artists.map(artist => artist.name).join(", "),
-    duration: track.duration_ms ? Math.floor(track.duration_ms / 1000) : null,
-    thumbnail: track.album?.images?.[0]?.url,
-    search: `${track.name} ${track.artists[0]?.name || ""} audio`
-  }));
-}
-
-async function resolveQuery(query, state = null) {
+async function resolveQuery(query) {
   // YouTube Music playlist URLs use the same playlist endpoint as YouTube.
   // Check for a list ID before yt_validate(), which can classify a watch URL
   // containing a list parameter as a single video.
@@ -827,64 +766,8 @@ async function resolveQuery(query, state = null) {
   }
 
   if (/open\.spotify\.com\//i.test(query)) {
-    const spotifyTracks = await spotifyItems(query);
-    if (!spotifyTracks.length) {
-      throw new Error(`No tracks ${MAX_TRACK_DURATION_SECONDS / 60} minutes or shorter were found in that Spotify release.`);
-    }
-
-    if (!state) {
-      // Legacy support: return the list if no state is provided
-      const CONCURRENCY_LIMIT = 45;
-      const resolvedResults = await limitConcurrency(spotifyTracks, CONCURRENCY_LIMIT, async (track, index) => {
-        const results = await searchYouTube(track.search, 10);
-        const match = results.find(result => hasAllowedDuration(result.durationInSec) && result.url);
-        if (match) {
-          return {
-            url: match.url,
-            title: track.title,
-            author: track.author,
-            duration: match.durationInSec,
-            thumbnail: track.thumbnail || artworkFrom(match.thumbnails)
-          };
-        }
-        return null;
-      });
-      return resolvedResults.filter(item => item !== null);
-    }
-
-    // INSTANT MODE: Push to queue in background
-    const CONCURRENCY_LIMIT = 3;
-    (async () => {
-      await limitConcurrency(spotifyTracks, CONCURRENCY_LIMIT, async (track, index) => {
-        try {
-          const results = await searchYouTube(track.search, 10);
-          const match = results.find(result => hasAllowedDuration(result.durationInSec) && result.url);
-          if (match) {
-            const resolvedTrack = {
-              url: match.url,
-              title: track.title,
-              author: track.author,
-              duration: match.durationInSec,
-              thumbnail: track.thumbnail || artworkFrom(match.thumbnails),
-              requestedById: "system" // Handled by the caller usually, but for background we mark it
-            };
-            // Add directly to queue without calling state.add (to avoid repeated connect calls)
-            state.queue.push(resolvedTrack);
-            scheduleMusicSave();
-
-            if (!state.playing) {
-              state.playNext().catch(e => console.error(`[background-play] ${e.message}`));
-            }
-          }
-          console.log(`[Spotify Resolve] Processed ${index + 1}/${spotifyTracks.length}: ${track.title}`);
-        } catch (e) {
-          console.error(`[Spotify Resolve] Error on track ${index}: ${e.message}`);
-        }
-      });
-      console.log(`[Spotify Resolve] Finished adding playlist to queue.`);
-    })();
-
-    return []; // Return empty to signal background processing
+    const spotifyTracks = await spotify.items(query);
+    return matchSpotifyTracks(spotifyTracks, searchYouTube, artworkFrom);
   }
 
   // Non-spotify queries still return normally for immediate play
@@ -1011,6 +894,7 @@ const handleCommand = async interaction => {
       (async () => {
         try {
           const tracks = await resolveQuery(query);
+          if (!tracks.length) throw new Error("No playable tracks were found.");
           const wasPlaying = state.playing && state.current;
           await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
 
