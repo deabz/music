@@ -98,7 +98,7 @@ test("registration failure and malformed guild snapshots do not prevent restorat
   const state = { restore: async () => { restored++; await pending; }, connect: async () => { joined++; } };
   const context = { startupComplete: false, shuttingDown: false, console: { log() {}, error() {} },
     client: { once: (_, fn) => { handler = fn; } }, Events: { ClientReady: "ready" },
-    updatePresence() {}, registerCommands: async () => { throw new Error("synthetic registration failure"); },
+    updatePresence() {}, startStartupDiagnostics() {}, registerCommands: async () => { throw new Error("synthetic registration failure"); },
     loadMusicState: async () => {}, favourites: { load: async () => {} }, savedMusicStates: { bad: null, malformed: [], valid: { voiceChannelId: "voice" } },
     getMusic: () => state, music: new Map(), VoiceConnectionStatus: { Ready: "ready" },
     config: { autoJoin: true, voiceGuildId: "auto", voiceChannelId: "voice" } };
@@ -131,7 +131,7 @@ test("panel reattachment still runs when a saved voice channel is gone", async (
   const state = { restorePanel: snapshot => { restoredIdentity = snapshot.panelMessageId; },
     panel: { reattach: async () => { attached++; } } };
   const context = { startupComplete: false, shuttingDown: false, console: { log() {}, error() {} },
-    client: { once: (_, fn) => { handler = fn; } }, Events: { ClientReady: "ready" }, updatePresence() {},
+    client: { once: (_, fn) => { handler = fn; } }, Events: { ClientReady: "ready" }, updatePresence() {}, startStartupDiagnostics() {},
     registerCommands: async () => {}, loadMusicState: async () => {}, favourites: { load: async () => {} },
     savedMusicStates: { guild: { voiceChannelId: "gone", panelChannelId: "text", panelMessageId: "existing" } },
     getMusic: () => state, music: new Map(), config: {} };

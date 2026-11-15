@@ -12,6 +12,7 @@ const { createPlayerPanel, buildPlayConfirmation, formatTrackTitle, short } = re
 const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic, streamEndDiagnostic } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
+const { startStartupDiagnostics } = require("./diagnostics");
 const { createAudioPipeline } = require("./audio-pipeline");
 const { parseTransitionSettings, shouldFadeIn, TransitionController, NATURAL_HANDOVER_GRACE_MS } = require("./transitions");
 const play = require("play-dl");
@@ -1056,6 +1057,7 @@ async function registerCommands() {
 
 client.once(Events.ClientReady, async ready => {
   console.log(`Logged in as ${ready.user.tag}`);
+  void startStartupDiagnostics();
   updatePresence();
   try { await registerCommands(); }
   catch (error) { console.error(`[startup] Command registration failed: ${error.stack || error.message}`); }

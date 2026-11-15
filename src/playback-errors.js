@@ -1,5 +1,6 @@
 function classifyStreamFailure(detail = "") {
   const text = String(detail);
+  if (/WinError\s*10013|\bEACCES\b|\bENETUNREACH\b|\bEHOSTUNREACH\b/i.test(text)) return { code: "network", message: "A network error or timeout interrupted the download" };
   if (/\b403\b|forbidden/i.test(text)) return { code: "403", message: "YouTube refused the download (403)" };
   if (/\b429\b|too many requests|rate.?limit/i.test(text)) return { code: "rate-limit", message: "YouTube rate-limited the download (429)" };
   if (/sign.?in|log.?in|age.?restrict|confirm your age|confirm you.?re not a bot/i.test(text)) return { code: "sign-in", message: "This video is age-restricted or needs sign-in" };

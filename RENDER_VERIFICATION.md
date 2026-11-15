@@ -75,3 +75,30 @@ YTDLP_PROXY is included in shared runtime options and tool calls. Proxy/cookie v
 are redacted from structured failures and generic metadata errors. The new voice
 readiness diagnostic distinguishes the working gateway from a failed voice transport.
 render.yaml uses Docker, /health and private sync:false fields; Render supplies PORT.
+
+## Phase 4 real standalone self-test
+
+The restricted-sandbox first attempt received Windows socket error 10013. The
+classifier was corrected so an OS permission error is network, not YouTube 403.
+The authorized unrestricted rerun produced this single block (cookies disabled,
+without reading protected files). Python is unnecessary for the Windows .exe;
+Python 3 is installed in the Linux image. UDP success here is only a return-path
+hint on this PC and says nothing definitive about Render/Discord voice.
+
+```text
+[diagnostics] node: v24.19.0 win32
+[diagnostics] bot: 1.0.0 commit ada9098
+[diagnostics] yt-dlp: OK 2026.10.26
+[diagnostics] ffmpeg: yes ffmpeg version 6.1.1-essentials_build-www.gyan.dev Copyright (c) 2000-2023 the FFmpeg developers
+[diagnostics] python3: no unavailable (informational)
+[diagnostics] YOUTUBE_COOKIES_FILE configured: no
+[diagnostics] YTDLP_PROXY configured: no
+[diagnostics] udp: 1.1.1.1=reply 8.8.8.8=reply (hint only; does not verify Discord voice UDP)
+[diagnostics] gateway: HTTP 200
+[diagnostics] youtube: OK (search=3 audio=262144 bytes)
+[diagnostics] summary: youtube=OK ytdlp=OK ffmpeg=OK udp=hint-OK
+```
+
+Startup invokes diagnostics without awaiting it after ClientReady. Checks have a
+60-second overall bound, and mock tests cover unavailable tools, cancellation,
+timeouts, once-only scheduling, disabled configuration and secret redaction.
