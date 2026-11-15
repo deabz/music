@@ -54,6 +54,8 @@ function guildMusicClass(overrides = {}) {
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     AudioPlayerStatus,
     ...require("../src/playback-errors"),
+    ...require("../src/transitions"),
+    hasAllowedDuration: value => value > 0 && value <= 1800,
     playbackPosition: require("../src/playback-position").playbackPosition,
     shuttingDown: false,
     AbortController,
@@ -88,9 +90,10 @@ test("pipeline cleanup accepts absent jobs and detaches references before cancel
   state.invalidateNext(); state.cancelActive(); state.cancelActive();
 });
 
-function skipFixture({ loop = "off", waiting = [], jobReady } = {}) {
+function skipFixture({ loop = "off", waiting = [], jobReady, transitionMode = "fade" } = {}) {
   const starts = [], jobs = [];
   const GuildMusic = guildMusicClass({
+    config: { transitionMode, transitionSeconds: 4 },
     createAudioPipeline: track => {
       const job = { formatReady: !jobReady, ready: jobReady, stream: {}, inputType: "test", rate: 1,
         cancel() { this.intentionallyAborted = true; } };
@@ -108,6 +111,121 @@ function skipFixture({ loop = "off", waiting = [], jobReady } = {}) {
   });
   return { state, starts, jobs, track };
 }
+
+function transitionFixture(options = {}) {
+  const f = skipFixture({ waiting: [{ title: "Next", url: "next", duration: 100 }], ...options });
+  const timers = new Map(); let timerId = 0;
+  f.state.transitions = new (require("../src/transitions").TransitionController)(f.state,
+    { mode: options.transitionMode || "fade", seconds: 4 }, {
+      setTimer: (callback, ms) => { timers.set(++timerId, { callback, ms }); return timerId; },
+      clearTimer: id => timers.delete(id)
+    });
+  f.state.resource = { playbackDuration: 99000, volume: { setVolume() {} } };
+  f.state.transitions.start(f.state.resource);
+  const gainsAtPlay = [], panelStarts = [];
+  const play = f.state.player.play;
+  f.state.player.play = resource => { gainsAtPlay.push(f.state.transitions.gain); play(resource); };
+  f.state.panel = { identifyTrack: track => { track.panelInstanceId ||= track.title; },
+    trackStarted: (track, options) => panelStarts.push({ title: track.title, ...options }) };
+  return { ...f, timers, gainsAtPlay, panelStarts };
+}
+
+test("natural progression reuses prefetch and starts silent before play, with one panel notification", async () => {
+  const f = transitionFixture(); f.state.prepareNext(); const prefetched = f.state.prefetch.job;
+  f.state.resource.playbackDuration = 100000; await f.state.onTrackEnd();
+  assert.equal(f.state.activePipeline, prefetched); assert.equal(f.jobs.length, 1);
+  assert.deepEqual(f.gainsAtPlay, [0]); assert.equal(f.timers.size, 1);
+  assert.equal(f.panelStarts.length, 1); assert.equal(f.panelStarts[0].title, "Next");
+  f.state.setVolume(120); assert.equal(f.state.volume, 120); assert.equal(f.state.transitions.gain, 0);
+  f.state.stop(); assert.equal(f.timers.size, 0);
+});
+
+test("manual skip and previous cut immediately; seek/effects/403/short-stream restart recompute gain without entrance", async () => {
+  for (const action of ["skip", "previous", "seek", "effects", "403", "short-stream"]) {
+    const f = transitionFixture(); f.state.resource.playbackDuration = action === "previous" ? 2000 : 99000;
+    if (action === "skip") await f.state.skip();
+    if (action === "previous") { f.state.history = [{ title: "Previous", url: "previous", duration: 100 }]; await f.state.previous(); }
+    if (action === "seek") {
+      f.state.transitions.settings.seconds = 12;
+      await f.state.seek(98); assert.ok(f.state.transitions.gain < 1); await f.state.seek(20);
+    }
+    if (action === "effects") { f.state.resource.playbackDuration = 20000; await f.state.setAudioFilters(["echo"]); }
+    if (action === "403") {
+      f.state.resource.playbackDuration = 20000;
+      await f.state.failPlayback(f.state.current, new Error("HTTP Error 403: Forbidden"));
+    }
+    if (action === "short-stream") {
+      f.state.resource.playbackDuration = 1000;
+      await f.state.retryShortStream(f.state.current, new Error("early stream end"));
+    }
+    assert.equal(f.state.transitions.fadeIn, false, action);
+    assert.equal(f.state.transitions.gain, 1, action);
+    assert.ok(f.timers.size <= 1, action); f.state.stop(); assert.equal(f.timers.size, 0, action);
+  }
+});
+
+test("queue loop fades naturally, loop-track does not, and off retains full volume", async () => {
+  for (const options of [{ loop: "queue" }, { loop: "track", waiting: [] }, { transitionMode: "off" }]) {
+    const f = transitionFixture(options); f.state.resource.playbackDuration = 100000;
+    await f.state.onTrackEnd();
+    const enabled = options.loop !== "track" && options.transitionMode !== "off";
+    assert.equal(f.gainsAtPlay[0], enabled ? 0 : 1);
+    if (!enabled) assert.equal(f.timers.size, 0);
+    f.state.stop(); assert.equal(f.timers.size, 0);
+  }
+});
+
+test("actual startup restoration suppresses fades and panel repost; empty queue grace expires", async () => {
+  const f = transitionFixture(); f.state.current = null; f.state.playing = false;
+  f.state.connect = async () => {};
+  await f.state.restore({ current: { title: "Saved", url: "saved", duration: 100 }, queue: [], volume: 80 }, {});
+  assert.deepEqual(f.gainsAtPlay, [1]); assert.equal(f.timers.size, 0);
+  assert.equal(f.panelStarts[0].restoring, true); f.state.stop();
+  for (const elapsed of [1000, 10000]) {
+    const next = transitionFixture(); next.state.current = null; next.state.playing = false;
+    next.state.lastNaturalEndAt = Date.now() - elapsed;
+    await next.state.playNext(); assert.equal(next.gainsAtPlay[0], elapsed < 5000 ? 0 : 1);
+    next.state.stop();
+  }
+});
+
+test("clean early EOF advances without waiting for metadata; short-stream detection uses real audio", async () => {
+  const f = transitionFixture(); f.state.resource.playbackDuration = 10000;
+  f.state.activePipeline = { sourceEnded: true, outputDone: true, children: [{ pipelineClosed: true }], cancel() {} };
+  await f.state.onTrackEnd(); assert.equal(f.state.current.title, "Next"); f.state.stop();
+  const short = transitionFixture(); short.state.resource.playbackDuration = 1000;
+  short.state.activePipeline = { startedAt: 1, cancel() {} };
+  short.state.transitions.gain = 0; assert.equal(short.state.isShortStream(), true);
+  short.state.resource.playbackDuration = 4000; assert.equal(short.state.isShortStream(), false);
+  short.state.stop();
+});
+
+test("resource cleanup, stop, disconnect and fatal playback errors release transition timers", async () => {
+  for (const action of ["cancelActive", "stop", "disconnect", "error"]) {
+    const f = transitionFixture(); assert.equal(f.timers.size, 1);
+    if (action === "error") {
+      f.state.guild.client = { channels: { cache: new Map() } };
+      f.state.failPlayback(f.state.current, new Error("HTTP Error 429"));
+    } else f.state[action]();
+    assert.equal(f.timers.size, 0, action); assert.equal(f.state.transitions.resource, null, action);
+  }
+});
+
+test("actual shutdown cleanup cancels the active fade wake-up", async () => {
+  const f = transitionFixture();
+  f.state.suggestions.dispose = () => {}; f.state.panel.dispose = () => {};
+  const begin = source.indexOf("async function shutdown(");
+  const end = source.indexOf('\nprocess.on("SIGINT"', begin);
+  const shutdown = vm.runInNewContext(source.slice(begin, end) + "\nshutdown;", {
+    shutdownPromise: null, shuttingDown: false, startupComplete: true, musicSaveTimer: null,
+    musicSaveChain: Promise.resolve(), music: new Map([["guild", f.state]]),
+    writeMusicState: async () => {}, favourites: { flush: async () => {} },
+    setTimeout: () => ({ unref() {} }), clearTimeout() {}, healthServer: { close() {} },
+    client: { destroy() {} }, process: { exit() {} }, console: quietConsole
+  });
+  assert.equal(f.timers.size, 1); await shutdown();
+  assert.equal(f.timers.size, 0); assert.equal(f.state.transitions.resource, null);
+});
 
 test("skip with no prefetch or active pipeline handles empty/waiting queues in every loop mode", async () => {
   for (const loop of ["off", "track", "queue"]) {

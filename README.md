@@ -110,6 +110,32 @@ results are rejected even if no alternative remains. These are metadata heuristi
 classifier. Recent suggestion URLs are tracked in memory for the current session.
 
 
+## Song transitions
+
+Optional `TRANSITION_MODE` accepts `off`, `fade` (default), or `crossfade`.
+Invalid modes warn and fall back to `fade`. Optional `TRANSITION_SECONDS` is the
+total transition duration, from 1 to 12 seconds (default 4); invalid values use 4.
+In fade mode, roughly half fades out the ending song and half fades in its natural
+successor using smooth equal-power ramps. Short tracks scale both halves to at most
+40% of the track duration. Songs do not overlap. `off` retains the original cuts.
+
+Manual skip/next/previous cut immediately. Seek, effects, stream retries and voice
+recovery do not add an entrance fade; their existing position determines the gain,
+so seeking into an outgoing fade applies it immediately and seeking away restores
+normal volume. Startup-restored playback and loop-track replay have no fades.
+Queue-loop and autoplay handovers fade normally. A song starting after an empty
+queue has no entrance fade unless it follows a natural ending within five seconds.
+Pause freezes the ramp; server volume and the panel volume buttons remain independent
+of fade gain. Fade timers are cancelled on resource cleanup, including stop and shutdown.
+Successful clean stream EOF advances even if duration metadata overestimates the song;
+stream failures and very short streams retain their existing error/retry handling.
+
+True crossfade is not implemented: selecting `crossfade` logs a startup warning and
+uses `fade`. It would require decoding both tracks to PCM, mixing overlapping audio,
+and handing over track identity, history, position, prefetch and panel state without
+an Idle event. That pipeline change needs live validation before it can be offered
+as an experimental feature; the current fallback adds no PCM mixer or extra decoder.
+
 ## Persistent Discord player panel
 
 Each server has one normal bot message with a gold queue embed, suggestions, and three button rows.
