@@ -153,7 +153,10 @@ class GuildMusic {
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on("stateChange", (_, next) => {
       console.log(`[player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
-      if (next.status === AudioPlayerStatus.Playing) this.prepareNext();
+      if (next.status === AudioPlayerStatus.Playing) {
+        if (this.activePipeline && !this.activePipeline.startedAt) this.activePipeline.startedAt = Date.now();
+        this.prepareNext();
+      }
       if (next.status === AudioPlayerStatus.Playing && this.pauseOnRestore) {
         this.pauseOnRestore = false;
         this.player.pause();
@@ -398,6 +401,7 @@ class GuildMusic {
 
   failPlayback(track, error) {
     if (!track || this.current !== track) return;
+    if (this.isShortStream()) return this.retryShortStream(track, error);
     console.error(`[playback:${this.guild.id}] ${error.message}`);
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
@@ -411,11 +415,46 @@ class GuildMusic {
     });
   }
 
+  isShortStream() {
+    const job = this.activePipeline;
+    return Boolean(job?.startedAt && this.resource && this.current
+      && this.current.duration - this.resumeOffsetSeconds > 3
+      && this.resource.playbackDuration < 3000);
+  }
+
+  retryShortStream(track, error) {
+    console.error(`[playback:${this.guild.id}] Short stream: ${error.message}`);
+    const retry = track.streamRetry || 0;
+    this.current = null; // Ignore Idle emitted by intentional player.stop().
+    this.invalidateNext();
+    this.cancelActive();
+    this.player.stop(true);
+    if (retry === 0) {
+      return this.playNext(null, { ...track, streamRetry: 1, resumeAtSeconds: this.resumeOffsetSeconds });
+    }
+    const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
+      || this.guild.client.channels.cache.get(this.guild.systemChannelId);
+    channel?.send("A song's audio ended unexpectedly after one retry. Trying the next queued song; check host logs if this continues.").catch(() => {});
+    this.shortStreamFailures = (this.shortStreamFailures || 0) + 1;
+    // Two consecutive exhausted songs indicate a host problem: keep the rest.
+    if (this.shortStreamFailures >= 2 || !this.queue.length) {
+      this.playing = false;
+      updatePresence();
+      scheduleMusicSave();
+      return;
+    }
+    return this.playNext();
+  }
+
   async onTrackEnd() {
     const endedTrack = this.current;
     if (!endedTrack) return;
     const job = this.activePipeline;
+    if (job?.cancelled) return;
+    if (this.isShortStream()) return this.retryShortStream(endedTrack, job?.error || new Error("Audio ended within three seconds."));
     if (job?.error) return this.failPlayback(endedTrack, job.error);
+    this.shortStreamFailures = 0;
+    delete endedTrack.streamRetry;
     // No awaiting child close: late failures are identity-guarded by job.onFailure.
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);

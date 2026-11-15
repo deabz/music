@@ -371,3 +371,30 @@ test("queue mutation ignores stale autoplay searches and cancels speculative aud
   assert.equal(state.queue.length, 0);
   assert.equal(cancelled, 1);
 });
+
+
+test("instant Idle retries once, notifies, advances and limits consecutive failures", async () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.create(GuildMusic.prototype);
+  let notices = 0, cancels = 0;
+  Object.assign(state, { guild: { id: "test", client: { channels: { cache: new Map([["text", { send: async () => { notices++; } }]]) } } },
+    notificationChannelId: "text", queue: [{ title: "next" }, { title: "kept" }],
+    player: { stop() {} }, playing: true, resumeOffsetSeconds: 0 });
+  const starts = [];
+  state.playNext = async (_, track) => { starts.push(track || state.queue.shift()); };
+  const short = retry => {
+    state.current = { title: "short", duration: 180, streamRetry: retry };
+    state.activePipeline = { startedAt: 1, cancel() { cancels++; } };
+    state.resource = { playbackDuration: 100 };
+  };
+  short(0); await state.onTrackEnd();
+  assert.equal(starts[0].streamRetry, 1);
+  short(1); await state.onTrackEnd();
+  assert.equal(starts[1].title, "next");
+  assert.equal(notices, 1);
+  short(1); await state.onTrackEnd();
+  assert.equal(starts.length, 2);
+  assert.equal(state.queue[0].title, "kept");
+  assert.equal(state.playing, false);
+  assert.equal(cancels, 3);
+});

@@ -48,3 +48,30 @@ test("cancelled child errors are ignored; genuine exit failure is retained", () 
   assert.match(failed.error.message, /blocked download/);
   failed.cancel();
 });
+test("stdout/stdin EPIPE is handled and intentional Windows abort noise stays silent", async () => {
+  for (const intentional of [true, false]) {
+    const fixture = launcher();
+    const job = createAudioPipeline({ url: "test" }, { echo: true }, 0, fixture.spawn);
+    let failures = 0;
+    job.onFailure = () => { failures++; };
+    if (intentional) job.cancel();
+    for (const { child } of fixture.calls) {
+      child.stdout.emit("error", Object.assign(new Error("Invalid argument"), { code: "EINVAL" }));
+      child.stdin.emit("error", Object.assign(new Error("Broken pipe"), { code: "EPIPE" }));
+      child.emit("close", 1);
+    }
+    assert.equal(failures, intentional ? 0 : 1);
+    job.cancel();
+  }
+});
+test("EOF is released only after successful child close without awaiting a promise", async () => {
+  const fixture = launcher();
+  const job = createAudioPipeline({ url: "test" }, {}, 0, fixture.spawn);
+  job.stream.resume();
+  fixture.calls[0].child.stdout.end("audio");
+  await new Promise(setImmediate);
+  assert.equal(job.stream.writableEnded, false);
+  fixture.calls[0].child.emit("close", 0);
+  assert.equal(job.stream.writableEnded, true);
+  job.cancel();
+});

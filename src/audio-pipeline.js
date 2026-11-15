@@ -14,6 +14,8 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
     if (job.cancelled || job.error) return;
     job.error = error;
     job.onFailure?.(error);
+    if (!stream.destroyed) stream.destroy(error);
+    job.cancel();
   };
   // Keep errors handled even before a prefetched stream has a player subscriber.
   stream.on("error", fail);
@@ -29,6 +31,13 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
     }
     stream.destroy();
   };
+  const finish = () => {
+    if (job.sourceEnded && job.children.every(child => child.pipelineClosed) && !job.error && !job.cancelled) stream.end();
+  };
+  const output = source => {
+    source.on("end", () => { job.sourceEnded = true; finish(); });
+    source.pipe(stream, { end: false });
+  };
   const watch = (child, label, downloader = false) => {
     job.children.push(child);
     let detail = "";
@@ -36,8 +45,10 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
     for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.on("error", fail);
     child.on("error", fail);
     child.on("close", code => {
+      child.pipelineClosed = true;
       if (downloader) job.downloadDone = true;
       if (code !== 0) fail(new Error(detail.trim() || `${label} exited with code ${code}.`));
+      finish();
     });
     return child;
   };
@@ -61,8 +72,8 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
       { stdio: ["pipe", "pipe", "pipe"] }), "FFmpeg");
       job.inputType = "raw";
       download.stdout.pipe(filter.stdin);
-      filter.stdout.pipe(stream);
-    } else download.stdout.pipe(stream);
+      output(filter.stdout);
+    } else output(download.stdout);
   } catch (error) { fail(error); job.cancel(); }
   return job;
 }
