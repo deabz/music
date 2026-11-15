@@ -5,16 +5,28 @@ const fs = require("fs/promises");
 const os = require("os");
 const path = require("path");
 const { hasVersion } = require("./song-identity");
+const { redactDiagnostic, classifyStreamFailure } = require("./playback-errors");
 let writableYouTubeCookiesFile = null;
 
 // Node is already installed on every bot host; yt-dlp does not enable it by default.
 const youtubeRuntimeOptions = () => ({
   jsRuntimes: `node:${process.execPath}`,
-  remoteComponents: "ejs:github"
+  remoteComponents: "ejs:github",
+  ...(process.env.YTDLP_PROXY?.trim() ? { proxy: process.env.YTDLP_PROXY.trim() } : {})
 });
 
 const youtubeCookieOptions = (file = writableYouTubeCookiesFile || process.env.YOUTUBE_COOKIES_FILE) =>
   typeof file === "string" && file.trim() ? { cookies: file.trim() } : {};
+async function requestYtdlp(run, ...args) {
+  try { return await run(...args); }
+  catch (error) {
+    const secrets = [youtubeCookieOptions().cookies, ...Object.entries(process.env)
+      .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|PROXY|API_KEY/i.test(key)).map(([, value]) => value)].filter(Boolean);
+    const stderr = redactDiagnostic(String(error.stderr || error.message || "").slice(-2000), secrets);
+    const failure = new Error(`YouTube request failed (${classifyStreamFailure(stderr).code}).`);
+    failure.stderr = stderr; failure.stage = "extract"; throw failure;
+  }
+}
 
 async function prepareYouTubeCookies(file = process.env.YOUTUBE_COOKIES_FILE) {
   if (typeof file !== "string" || !file.trim()) return;
@@ -61,7 +73,7 @@ const isSongResult = result =>
 
 async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undefined) {
   const resultCount = Math.max(1, Math.min(20, Math.floor(limit) || 10));
-  const result = await runYtdlp(`ytsearch${resultCount}:${query}`, {
+  const result = await requestYtdlp(runYtdlp, `ytsearch${resultCount}:${query}`, {
     dumpSingleJson: true,
     flatPlaylist: true,
     skipDownload: true,
@@ -116,7 +128,7 @@ function buildGeniusSearchUrl(title, artist) {
 }
 
 async function resolvePlaylist(url, runYtdlp = ytdlp) {
-  const result = await runYtdlp(url, {
+  const result = await requestYtdlp(runYtdlp, url, {
     dumpSingleJson: true,
     flatPlaylist: true,
     noWarnings: true,
@@ -124,7 +136,7 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
     ...youtubeCookieOptions(),
     ...youtubeRuntimeOptions(),
     ffmpegLocation: require('ffmpeg-static')
-  });
+  }, { timeout: 20000, windowsHide: true });
   const entries = Array.isArray(result.entries) ? result.entries : [];
   return entries.map(entry => ({
     url: entry.webpage_url || entry.original_url || entry.url || (entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : null),

@@ -108,7 +108,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     const options = { format: "bestaudio[ext=webm][acodec=opus]/bestaudio", output: "-", noPlaylist: true,
       noWarnings: true, quiet: true, ...youtubeCookieOptions(), ...youtubeRuntimeOptions(),
       ffmpegLocation: ffmpeg };
-    job.diagnosticSecrets = [options.cookies].filter(Boolean);
+    job.diagnosticSecrets = [options.cookies, options.proxy].filter(Boolean);
     job.commands.push({ stage: "extract", executable: ytdlp.constants.YOUTUBE_DL_PATH, args: [...ytdlp.args(options), "--", track.url] });
     // Native spawn avoids tinyspawn's unbounded duplicate stdout collection.
     const download = watch(launch(ytdlp.constants.YOUTUBE_DL_PATH,

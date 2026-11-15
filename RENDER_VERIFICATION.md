@@ -51,3 +51,27 @@ still require manual verification.
 
 Registration limits were checked against Discord's application-command documentation:
 https://docs.discord.com/developers/docs/interactions/slash-commands
+
+## Phase 3 Linux/Render audit
+
+Dockerfile targets node:22-bookworm-slim, installs Python 3, CA certificates and tini,
+uses npm ci during image build only, and runs unprivileged. No dependency install or
+update was run on this PC. Docker is absent, so no Docker build or live Linux run
+was possible. The installed youtube-dl-exec postinstall was inspected read-only:
+Unix selects the yt-dlp asset without .exe, Windows selects yt-dlp.exe; postinstall
+downloads and chmods it executable. The Unix yt-dlp asset needs Python; Bookworm's
+Python 3 satisfies that runtime requirement. Node's explicit js-runtimes option is
+shared by all YouTube calls. Relevant upstream implementation:
+https://github.com/microlinkhq/youtube-dl-exec/blob/master/scripts/postinstall.js
+
+Linux pipeline children already spawn detached; cancellation kills their negative
+PID process group, with individual-child fallback. Windows keeps taskkill tree
+cancellation and awaits termination before replacement. Platform-mocked tests cover
+both. Read-only Secret File copying is covered by a mocked Linux filesystem test,
+plus an actual temporary read-only source test on Windows; Linux permission behavior
+remains unverified on this PC. Docker/shell LF rules are enforced by .gitattributes.
+
+YTDLP_PROXY is included in shared runtime options and tool calls. Proxy/cookie values
+are redacted from structured failures and generic metadata errors. The new voice
+readiness diagnostic distinguishes the working gateway from a failed voice transport.
+render.yaml uses Docker, /health and private sync:false fields; Render supplies PORT.

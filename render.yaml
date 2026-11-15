@@ -1,7 +1,32 @@
 services:
   - type: web
     name: discord-music-bot
-    runtime: node
+    runtime: docker
     plan: starter
-    buildCommand: YOUTUBE_DL_SKIP_PYTHON_CHECK=1 npm ci
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTO_JOIN_VOICE
+        value: "false"
+      - key: STARTUP_DIAGNOSTICS
+        value: "true"
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: MUSIC_DASHBOARD_TOKEN
+        sync: false
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: YTDLP_PROXY
+        sync: false
+      - key: YOUTUBE_COOKIES_FILE
+        sync: false

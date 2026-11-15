@@ -1,12 +1,15 @@
 const { execFile } = require("node:child_process");
 const { constants } = require("youtube-dl-exec");
+const { redactDiagnostic } = require("./playback-errors");
 
 function runYtdlpTool(args, execute = execFile) {
   return new Promise((resolve, reject) => {
-    execute(constants.YOUTUBE_DL_PATH, args, { windowsHide: true, timeout: args.includes("-U") ? 120000 : 8000,
+    const proxy = process.env.YTDLP_PROXY?.trim();
+    const secrets = [proxy, process.env.YOUTUBE_COOKIES_FILE].filter(Boolean);
+    execute(constants.YOUTUBE_DL_PATH, [...(proxy ? ["--proxy", proxy] : []), ...args], { windowsHide: true, timeout: args.includes("-U") ? 120000 : 8000,
       encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) return reject(error);
-      resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+      if (error) return reject(new Error("yt-dlp executable check failed."));
+      resolve({ stdout: redactDiagnostic(stdout.trim(), secrets), stderr: redactDiagnostic(stderr.trim(), secrets) });
     });
   });
 }

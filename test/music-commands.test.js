@@ -826,6 +826,16 @@ test("normal reconnect accepts Connecting and resumes without restarting track",
   assert.equal(connecting, true); assert.equal(resumed, 1);
   assert.equal(state.connection, connection);
 });
+test("a voice readiness timeout gives one clear gateway-versus-UDP diagnostic", async () => {
+  const messages = [];
+  const connection = { state: { status: "connecting" }, subscribe() {}, on() {}, destroy() { this.state.status = "destroyed"; } };
+  const GuildMusic = guildMusicClass({ VoiceConnectionStatus: { Ready: "ready", Destroyed: "destroyed" },
+    joinVoiceChannel: () => connection, entersState: async () => { throw new Error("timeout"); },
+    console: { log() {}, error: value => messages.push(value) } });
+  const state = Object.assign(Object.create(GuildMusic.prototype), { guild: { id: "guild" }, player: {} });
+  await assert.rejects(state.openConnection({ id: "voice", guild: { id: "guild" } }, 0));
+  assert.equal(messages.filter(value => value.includes("Gateway connected") && value.includes("UDP")).length, 1);
+});
 
 test("failed reconnect clears destroyed connection, tries twice and preserves current position", async () => {
   let attempts = 0, destroyed = 0;

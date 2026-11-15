@@ -17,7 +17,7 @@ function redactDiagnostic(value, secrets = []) {
 function streamFailureDiagnostic(state, track, error, stage = "player") {
   const job = state.activePipeline;
   const secrets = [...(job?.diagnosticSecrets || []), ...Object.entries(process.env)
-    .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|API_KEY/i.test(key)).map(([, value]) => value)];
+    .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|API_KEY|PROXY/i.test(key)).map(([, value]) => value)];
   const redact = value => redactDiagnostic(value, secrets);
   return JSON.stringify({ guild: state.guild?.id, track: redact(track?.title), generation: job?.generationId ?? job?.playbackGeneration ?? null, stage: error.stage || stage,
     message: redact(error.message), effects: job?.filters || state.audioFilters,
@@ -31,7 +31,7 @@ function streamEndDiagnostic(state, track, job, reason, resource) {
   const offset = job?.offset ?? state.resumeOffsetSeconds ?? 0;
   const delivered = (resource?.playbackDuration || 0) / 1000 * (job?.rate || state.resourcePlaybackRate || 1);
   const secrets = [...(job?.diagnosticSecrets || []), ...Object.entries(process.env)
-    .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|API_KEY/i.test(key)).map(([, value]) => value)];
+    .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|API_KEY|PROXY/i.test(key)).map(([, value]) => value)];
   return JSON.stringify({ guild: state.guild?.id, track: redactDiagnostic(track?.title, secrets),
     generation: job?.generationId ?? job?.playbackGeneration ?? null, reason,
     deliveredSeconds: delivered, expectedSeconds: Math.max(0, (track?.duration || 0) - offset),

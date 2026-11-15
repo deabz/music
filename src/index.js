@@ -316,6 +316,9 @@ class GuildMusic {
       await entersState(connection, VoiceConnectionStatus.Ready, 15000);
       if (generation !== (this.voiceGeneration || 0)) throw new Error("Voice connection was cancelled.");
     } catch (error) {
+      if (generation === (this.voiceGeneration || 0) && connection.state.status !== VoiceConnectionStatus.Ready) {
+        console.error(`[voice:${this.guild.id}] Gateway connected; voice WebSocket/UDP failed before ready (15s timeout; possible host UDP restriction).`);
+      }
       if (this.connection === connection) this.connection = null;
       if (connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
       throw error;
