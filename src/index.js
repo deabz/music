@@ -6,7 +6,8 @@ const storage = require("./storage");
 const { FavouritesStore } = require("./favourites");
 const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
-const { SongMemory } = require("./song-identity");
+const { SongMemory, blockedSongKeys, songKey } = require("./song-identity");
+const { chooseAutoplayCandidate } = require("./autoplay-candidates");
 const { createPlayerPanel, buildPlayConfirmation, formatTrackTitle, short } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic, streamEndDiagnostic } = require("./playback-errors");
@@ -511,12 +512,13 @@ class GuildMusic {
     const controller = new AbortController();
     this.suggestionAbort = controller;
     const suggestionTask = this.suggestions
-      ? this.suggestions.candidates(current).then(items => items.find(item => !this.autoplayTriedUrls.has(item.url)) || null)
+      ? this.suggestions.candidates(current).then(items => chooseAutoplayCandidate(items, this, current))
       : resolveSuggestedTrack(current, this.autoplayTriedUrls,
         (query, options) => searchYouTube(query, options.limit, undefined, controller.signal), artworkFrom);
     suggestionTask
       .then(suggestion => {
-        if (!suggestion || generation !== this.nextGeneration || (this.current && this.current !== current) || this.queue.length) return;
+        if (!suggestion || generation !== this.nextGeneration || (this.current && this.current !== current) || this.queue.length
+          || blockedSongKeys(this, current).has(songKey(suggestion))) return;
         this.autoplayTriedUrls.add(suggestion.url);
         this.queue.push(suggestion);
         this.suggestions?.removeUrl(suggestion.url);

@@ -2,6 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { AutoplayCandidates, rankAutoplayCandidates, AUTOPLAY_SCORE_WEIGHTS, buildThemeQueries, MIX_CACHE_TTL_MS } = require("../src/autoplay-candidates");
 const { SongMemory, songKey } = require("../src/song-identity");
+const { chooseAutoplayCandidate, limitSuggestionArtists, AUTOPLAY_MAX_CONSECUTIVE_ARTIST, SUGGESTIONS_MAX_PER_ARTIST } = require("../src/autoplay-candidates");
 const song = (artist, title, id = title) => ({ title: `${artist} - ${title}`, author: artist, url: `https://example.com/${id}`, duration: 180 });
 const seed = { ...song("Seed", "Original"), url: "https://youtube.com/watch?v=dQw4w9WgXcQ" };
 test("ranker rejects alternate uploads of FRANCHISE, queue/recent repeats, junk, versions and duration bounds", () => {
@@ -40,4 +41,20 @@ test("scores are calculated from the exported weight object", () => {
   const result = rankAutoplayCandidates([entry], { current: seed, queue: [] }, seed)[0];
   assert.equal(result.suggestionScore, 2 * AUTOPLAY_SCORE_WEIGHTS.mixMembership + AUTOPLAY_SCORE_WEIGHTS.additionalSeed
     + AUTOPLAY_SCORE_WEIGHTS.similarDuration + AUTOPLAY_SCORE_WEIGHTS.sameScript);
+});
+test("two autoplay songs by one artist prefer another artist, with same-artist fallback only if necessary", () => {
+  assert.equal(AUTOPLAY_MAX_CONSECUTIVE_ARTIST, 2);
+  const current = { ...song("Artist", "Current"), autoSuggested: true };
+  const state = { current, queue: [], history: [{ ...song("Artist", "Previous"), autoSuggested: true }] };
+  const same = { ...song("Artist", "Third"), mixSeeds: ["a", "b", "c"] }, different = song("Other", "Alternative");
+  assert.equal(chooseAutoplayCandidate([same, different], state, current).title, different.title);
+  assert.equal(chooseAutoplayCandidate([same], state, current).title, same.title);
+  current.autoSuggested = false;
+  assert.equal(chooseAutoplayCandidate([same, different], state, current).title, same.title);
+});
+test("suggestion list caps each main artist at the exported limit and deduplicates song identity", () => {
+  const items = [...Array.from({ length: 5 }, (_, index) => song("Artist", `Song ${index}`)), song("Other", "Other"), song("Artist", "Song 0 (Audio)")];
+  const limited = limitSuggestionArtists(items);
+  assert.equal(limited.filter(track => track.author === "Artist").length, SUGGESTIONS_MAX_PER_ARTIST);
+  assert.equal(limited.length, 3);
 });

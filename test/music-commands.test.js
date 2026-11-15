@@ -57,6 +57,8 @@ function guildMusicClass(overrides = {}) {
     AudioPlayerStatus,
     ...require("../src/playback-errors"),
     ...require("../src/transitions"),
+    ...require("../src/song-identity"),
+    ...require("../src/autoplay-candidates"),
     hasAllowedDuration: value => value > 0 && value <= 1800,
     playbackPosition: require("../src/playback-position").playbackPosition,
     shuttingDown: false,

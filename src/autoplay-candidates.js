@@ -5,6 +5,8 @@ const MIX_CACHE_TTL_MS = 30 * 60 * 1000;
 const MIX_ENTRY_LIMIT = 25;
 const AUTOPLAY_LOOKUP_TIMEOUT_MS = 45000;
 const AUTOPLAY_SCORE_WEIGHTS = { mixMembership: 100, additionalSeed: 80, similarDuration: 15, sameScript: 10, recentArtistPenalty: 30, searchTheme: 35 };
+const AUTOPLAY_MAX_CONSECUTIVE_ARTIST = 2;
+const SUGGESTIONS_MAX_PER_ARTIST = 2;
 
 function videoId(track) {
   try {
@@ -64,6 +66,28 @@ function buildThemeQueries(seed, history = []) {
   const previous = [...new Set(history.slice(-2).map(track => songIdentity(track).artist).filter(Boolean))].join(" ");
   return [...new Set([`${title.slice(0, 120)} ${hints} similar songs`, `${title.slice(0, 80)} ${artist} ${previous} ${hints} songs like this`]
     .map(query => query.replace(/\s+/g, " ").trim()))];
+}
+function limitSuggestionArtists(items, limit = 10) {
+  const counts = new Map(), keys = new Set(), result = [];
+  for (const item of items) {
+    const { artistKey, key } = songIdentity(item);
+    if (keys.has(key) || (counts.get(artistKey) || 0) >= SUGGESTIONS_MAX_PER_ARTIST) continue;
+    keys.add(key); counts.set(artistKey, (counts.get(artistKey) || 0) + 1); result.push(item);
+    if (result.length === limit) break;
+  }
+  return result;
+}
+function chooseAutoplayCandidate(items, state, seed) {
+  const ranked = rankAutoplayCandidates(items, state, seed);
+  const artist = songIdentity(seed).artistKey;
+  const session = [seed, ...(state.history || []).filter(track => songKey(track) !== songKey(seed)).slice().reverse()];
+  let streak = 0;
+  for (const track of session) {
+    if (!track.autoSuggested || songIdentity(track).artistKey !== artist) break;
+    streak++;
+  }
+  if (streak >= AUTOPLAY_MAX_CONSECUTIVE_ARTIST) return ranked.find(track => songIdentity(track).artistKey !== artist) || ranked[0] || null;
+  return ranked[0] || null;
 }
 async function fetchMix(seedId, signal, run = ytdlp) {
   const result = await run(`https://www.youtube.com/watch?v=${seedId}&list=RD${seedId}`, {
@@ -128,7 +152,7 @@ class AutoplayCandidates {
             }
           }
         }
-        return controller.signal.aborted ? [] : rankAutoplayCandidates(entries, this.state, seed);
+        return controller.signal.aborted ? [] : limitSuggestionArtists(rankAutoplayCandidates(entries, this.state, seed));
       } finally {
         clearTimeout(timer); signal?.removeEventListener("abort", cancel);
         if (this.active === controller) this.active = null;
@@ -140,4 +164,5 @@ class AutoplayCandidates {
   dispose() { this.cancel(); this.cache.clear(); }
 }
 module.exports = { AutoplayCandidates, rankAutoplayCandidates, buildThemeQueries, fetchMix, candidateTrack, scriptOf, videoId,
+  chooseAutoplayCandidate, limitSuggestionArtists, AUTOPLAY_MAX_CONSECUTIVE_ARTIST, SUGGESTIONS_MAX_PER_ARTIST,
   MIX_CACHE_TTL_MS, MIX_ENTRY_LIMIT, AUTOPLAY_LOOKUP_TIMEOUT_MS, AUTOPLAY_SCORE_WEIGHTS };
