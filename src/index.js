@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const storage = require("./storage");
-const { spawn } = require("child_process");
+const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
 const ytdlp = require("youtube-dl-exec");
 const {
@@ -135,6 +135,9 @@ class GuildMusic {
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
     this.connection = null;
     this.streamProcess = null;
+    this.activePipeline = null;
+    this.prefetch = null;
+    this.nextGeneration = 0;
     this.filterProcess = null;
     this.emptyTimer = null;
     this.pausedForEmpty = false;
@@ -150,6 +153,7 @@ class GuildMusic {
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on("stateChange", (_, next) => {
       console.log(`[player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
+      if (next.status === AudioPlayerStatus.Playing) this.prepareNext();
       if (next.status === AudioPlayerStatus.Playing && this.pauseOnRestore) {
         this.pauseOnRestore = false;
         this.player.pause();
@@ -163,6 +167,7 @@ class GuildMusic {
   }
 
   setAudioFilter(filter, enabled) {
+    this.invalidateNext();
     this.audioFilters[filter] = enabled;
     if (this.playing && this.current) {
       // Capture current position before restarting
@@ -234,10 +239,12 @@ class GuildMusic {
     if (this.queue.length + items.length > config.maxQueueSize) {
       throw new Error(`The queue can contain at most ${config.maxQueueSize} tracks.`);
     }
+    this.invalidateNext();
     await this.connect(voiceChannel);
     this.queue.push(...items.map(track => ({ ...track, requestedById: requesterId })));
     this.autoplayTriedUrls.clear();
     this.notificationChannelId = notificationChannel?.id || null;
+    if (this.playing) this.prepareNext();
     scheduleMusicSave();
     if (!this.playing) {
       this.playNext().catch(error => {
@@ -270,13 +277,13 @@ class GuildMusic {
     if (from < 0 || from >= this.queue.length || to < 0 || to >= this.queue.length) return false;
     const [track] = this.queue.splice(from, 1);
     this.queue.splice(to, 0, track);
-    scheduleMusicSave();
+    this.queueChanged();
     return true;
   }
 
   clearQueue() {
     this.queue = [];
-    scheduleMusicSave();
+    this.queueChanged();
   }
 
   async restore(snapshot, channel) {
@@ -304,34 +311,60 @@ class GuildMusic {
     scheduleMusicSave();
   }
 
-  async playNext(endedTrack = null, trackToPlay = null) {
-    clearTimeout(this.emptyTimer);
-    if (this.streamProcess) this.streamProcess.cancelled = true;
-    this.streamProcess?.kill();
+  invalidateNext() {
+    this.nextGeneration = (this.nextGeneration || 0) + 1;
+    this.prefetch?.job.cancel();
+    this.prefetch = null;
+  }
+
+  queueChanged() {
+    this.invalidateNext();
+    scheduleMusicSave();
+    if (this.current) this.prepareNext(false);
+  }
+
+  prepareNext(allowSuggestion = true) {
+    if (!this.current || !this.playing) return;
+    const track = this.loop === "track" ? this.current : this.queue[0]
+      || (this.loop === "queue" ? this.current : null);
+    if (track) {
+      if (this.prefetch?.track === track) return;
+      this.prefetch?.job.cancel();
+      const job = createAudioPipeline(track, this.audioFilters);
+      this.prefetch = { track, job };
+      job.onFailure = () => {}; // Retain error for activation; never log speculative aborts.
+      return;
+    }
+    if (!allowSuggestion || this.suggestionGeneration === this.nextGeneration) return;
+    const generation = this.nextGeneration;
+    this.suggestionGeneration = generation;
+    const current = this.current;
+    resolveSuggestedTrack(current, this.autoplayTriedUrls,
+      (query, options) => searchYouTube(query, options.limit), artworkFrom)
+      .then(suggestion => {
+        if (!suggestion || generation !== this.nextGeneration || this.current !== current || this.queue.length) return;
+        this.autoplayTriedUrls.add(suggestion.url);
+        this.queue.push(suggestion);
+        scheduleMusicSave();
+        this.prepareNext(false);
+      }).catch(error => console.error(`[autoplay:${this.guild.id}] ${error.message}`));
+  }
+
+  cancelActive() {
+    this.activePipeline?.cancel();
+    this.activePipeline = null;
     this.streamProcess = null;
-    if (this.filterProcess) this.filterProcess.cancelled = true;
-    this.filterProcess?.kill();
     this.filterProcess = null;
     this.resource = null;
-    let next = trackToPlay || this.queue.shift();
-    if (!next && endedTrack) {
-      if (!endedTrack.autoSuggested) this.autoplayTriedUrls.clear();
-      try {
-        next = await resolveSuggestedTrack(
-          endedTrack,
-          this.autoplayTriedUrls,
-          (search, options) => searchYouTube(search, options.limit),
-          artworkFrom
-        );
-        if (next) {
-          this.autoplayTriedUrls.add(next.url);
-          console.log(`[autoplay:${this.guild.id}] Trying ${next.title} (${next.duration}s).`);
-        }
-      } catch (error) {
-        console.error(`[autoplay:${this.guild.id}] ${error.message}`);
-      }
-      next = this.queue.shift() || next;
-    }
+  }
+
+  async playNext(endedTrack = null, trackToPlay = null) {
+    clearTimeout(this.emptyTimer);
+    const next = trackToPlay || this.queue.shift();
+    const prepared = !trackToPlay && this.prefetch?.track === next ? this.prefetch.job : null;
+    if (prepared) this.prefetch = null;
+    this.invalidateNext();
+    this.cancelActive();
     if (!next) {
       this.current = null;
       this.playing = false;
@@ -339,121 +372,28 @@ class GuildMusic {
       scheduleMusicSave();
       return;
     }
-    if (!next.autoSuggested) this.autoplayTriedUrls.clear();
     this.current = next;
-
     this.resumeOffsetSeconds = Number.isFinite(next.resumeAtSeconds) ? next.resumeAtSeconds : 0;
     delete next.resumeAtSeconds;
     this.playing = true;
     updatePresence();
     if (!trackToPlay) this.totalTracksPlayed++;
     try {
-      const audioFilters = [];
-      if (this.audioFilters.bassboost) {
-        audioFilters.push("bass=g=10");
-      }
-      if (this.audioFilters.eightd) {
-        audioFilters.push("apulsator=hz=0.1");
-      }
-      if (this.audioFilters.nightcore) {
-        audioFilters.push("asetrate=44100*1.2,atempo=1.2");
-      }
-      if (this.audioFilters.echo) {
-        audioFilters.push("aecho=0.8:0.88:60:0.4");
-      }
-
-      const streamProcess = ytdlp.exec(next.url, {
-        format: "bestaudio[ext=webm][acodec=opus]",
-        output: "-",
-        noPlaylist: true,
-        noWarnings: true,
-        quiet: true,
-        ...youtubeCookieOptions(),
-        ...youtubeRuntimeOptions(),
-        ffmpegLocation: require('ffmpeg-static'),
-        ...(this.resumeOffsetSeconds > 0
-          ? { downloadSections: `*${formatYtdlpTime(this.resumeOffsetSeconds)}-inf` }
-          : {})
-      });
-      this.streamProcess = streamProcess;
-      const sourceStream = streamProcess.stdout;
-      if (!sourceStream || typeof sourceStream.pipe !== "function") {
-        throw new Error("yt-dlp did not provide an audio stream.");
-      }
-      let stderr = "";
-      streamProcess.stderr?.on("data", chunk => {
-        stderr = `${stderr}${chunk}`.slice(-2000);
-      });
-      streamProcess.on("close", (code) => {
-        if (streamProcess.cancelled || code === 0) return;
-        this.failPlayback(next, new Error(stderr.trim() || `yt-dlp exited with code ${code}.`));
-      });
-      streamProcess.catch(error => {
-        if (streamProcess.cancelled || this.current !== next) return;
-        const detail = stderr.trim() || error.message;
-        console.error(`[stream:${this.guild.id}] ${detail}`);
-        this.failPlayback(next, new Error(detail));
-      });
-
-      let audioStream = sourceStream;
-      let inputType = StreamType.WebmOpus;
-      if (audioFilters.length) {
-        const filterProcess = spawn(require("ffmpeg-static"), [
-          "-hide_banner",
-          "-loglevel", "error",
-          "-i", "pipe:0",
-          "-af", audioFilters.join(","),
-          "-f", "s16le",
-          "-ar", "48000",
-          "-ac", "2",
-          "pipe:1"
-        ], { stdio: ["pipe", "pipe", "pipe"] });
-        this.filterProcess = filterProcess;
-        audioStream = filterProcess.stdout;
-        inputType = StreamType.Raw;
-
-        let filterError = "";
-        filterProcess.stderr.on("data", chunk => {
-          filterError = `${filterError}${chunk}`.slice(-2000);
-        });
-        filterProcess.stdin.on("error", error => {
-          if (filterProcess.cancelled || error.code === "EPIPE") return;
-          console.error(`[filter:${this.guild.id}] ${error.message}`);
-        });
-        filterProcess.on("error", error => {
-          if (filterProcess.cancelled) return;
-          console.error(`[filter:${this.guild.id}] ${filterError.trim() || error.message}`);
-          if (!audioStream.destroyed) audioStream.destroy(error);
-        });
-        filterProcess.on("close", code => {
-          if (this.filterProcess === filterProcess) this.filterProcess = null;
-          if (filterProcess.cancelled || code === 0 || !this.playing) return;
-          const error = new Error(filterError.trim() || `FFmpeg exited with code ${code}.`);
-          console.error(`[filter:${this.guild.id}] ${error.message}`);
-          if (!audioStream.destroyed) audioStream.destroy(error);
-        });
-        sourceStream.on("error", error => {
-          if (!filterProcess.stdin.destroyed) filterProcess.stdin.destroy();
-          if (!audioStream.destroyed) audioStream.destroy(error);
-        });
-        sourceStream.pipe(filterProcess.stdin);
-      }
-
-      const resource = createAudioResource(audioStream, {
-        inputType,
-        inlineVolume: true
-      });
+      const job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
+      this.activePipeline = job;
+      this.streamProcess = job.download;
+      job.onFailure = error => {
+        if (this.activePipeline === job && !job.cancelled) this.failPlayback(next, error);
+      };
+      if (job.error) throw job.error;
+      const resource = createAudioResource(job.stream, { inputType: job.inputType, inlineVolume: true });
       this.resource = resource;
-      this.resourcePlaybackRate = this.audioFilters.nightcore ? (44100 * 1.2 / 48000) * 1.2 : 1;
+      this.resourcePlaybackRate = job.rate;
       resource.volume.setVolume(this.volume / 100);
-      console.log(`[stream:${this.guild.id}] Starting ${next.title}`);
+      console.log(`[stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""}`);
       this.player.play(resource);
       scheduleMusicSave();
-    } catch (error) {
-      console.error(`[stream:${this.guild.id}] ${error.message}`);
-      scheduleMusicSave();
-      this.failPlayback(next, error);
-    }
+    } catch (error) { this.failPlayback(next, error); }
   }
 
   failPlayback(track, error) {
@@ -472,19 +412,11 @@ class GuildMusic {
   }
 
   async onTrackEnd() {
-    if (!this.current) return;
     const endedTrack = this.current;
-    const process = this.streamProcess;
-    // EOF can reach the voice player before the downloader reports its failure.
-    if (process && !process.cancelled) {
-      try {
-        await process;
-      } catch (error) {
-        if (!process.cancelled) this.failPlayback(endedTrack, error);
-        return;
-      }
-    }
-    if (this.current !== endedTrack) return;
+    if (!endedTrack) return;
+    const job = this.activePipeline;
+    if (job?.error) return this.failPlayback(endedTrack, job.error);
+    // No awaiting child close: late failures are identity-guarded by job.onFailure.
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
@@ -492,6 +424,8 @@ class GuildMusic {
   }
 
   stop() {
+    this.invalidateNext();
+    this.cancelActive();
     this.pausedForEmpty = false;
     this.queue = [];
     this.current = null;
@@ -526,11 +460,13 @@ class GuildMusic {
   }
 
   shuffle() {
+    this.invalidateNext();
     for (let index = this.queue.length - 1; index > 0; index--) {
       const other = Math.floor(Math.random() * (index + 1));
       [this.queue[index], this.queue[other]] = [this.queue[other], this.queue[index]];
     }
     scheduleMusicSave();
+    this.prepareNext(false);
     return this.queue.length;
   }
 
@@ -1039,6 +975,7 @@ const handleCommand = async interaction => {
       return interaction.editReply(`Forwarded to ${formatDuration(state.resumeOffsetSeconds)}.`);
     }
     if (interaction.commandName === "skip") {
+      state.invalidateNext();
       state.player.stop(); return reply(interaction, "Skipped the current track.");
     }
     if (interaction.commandName === "stop") {
@@ -1080,6 +1017,7 @@ const handleCommand = async interaction => {
     }
     if (interaction.commandName === "loop") {
       state.loop = interaction.options.getString("mode", true);
+      state.queueChanged();
       scheduleMusicSave();
       return reply(interaction, `Repeat mode set to ${state.loop}.`);
     }
@@ -1089,6 +1027,7 @@ const handleCommand = async interaction => {
         return reply(interaction, `Invalid position. The queue has ${state.queue.length} songs.`);
       }
       const removed = state.queue.splice(position - 1, 1)[0];
+      state.queueChanged();
       scheduleMusicSave();
       return reply(interaction, `Removed **${removed.title}** from the queue.`);
     }
@@ -1293,6 +1232,7 @@ async function controlDashboard(payload) {
     if (!await state.resumePlayback("dashboard")) throw dashboardError("Playback is not paused.");
   } else if (action === "skip") {
     if (!state.current) throw dashboardError("Nothing is playing.");
+    state.invalidateNext();
     state.player.stop();
   } else if (action === "stop") {
     state.stop();
@@ -1311,6 +1251,7 @@ async function controlDashboard(payload) {
       throw dashboardError("Repeat mode must be off, track, or queue.");
     }
     state.loop = payload.mode;
+    state.queueChanged();
     scheduleMusicSave();
   } else if (action === "add") {
     if (typeof payload.query !== "string" || !payload.query.trim() || payload.query.length > 500) {
@@ -1326,6 +1267,7 @@ async function controlDashboard(payload) {
       throw dashboardError("That queue position is no longer available.");
     }
     state.queue.splice(payload.position, 1);
+    state.queueChanged();
     scheduleMusicSave();
   } else if (action === "move") {
     if (!Number.isInteger(payload.from) || !Number.isInteger(payload.to)
@@ -1387,6 +1329,8 @@ async function shutdown() {
   await musicSaveChain;
   await writeMusicState().catch(error => console.error(`[persistence] Could not save state during shutdown: ${error.message}`));
   for (const state of music.values()) {
+    state.invalidateNext();
+    state.cancelActive();
     if (state.streamProcess) state.streamProcess.cancelled = true;
     state.streamProcess?.kill();
     if (state.filterProcess) state.filterProcess.cancelled = true;

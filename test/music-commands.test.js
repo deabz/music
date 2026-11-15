@@ -36,6 +36,7 @@ function commandHandler(state, overrides = {}) {
     playbackPosition: require("../src/playback-position").playbackPosition,
     console: quietConsole,
     require,
+    scheduleMusicSave() {},
     ...overrides
   });
 }
@@ -45,6 +46,9 @@ function guildMusicClass(overrides = {}) {
   const end = source.indexOf("\nconst client =", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     AudioPlayerStatus,
+    createAudioPipeline() { throw new Error("Synthetic stream boundary"); },
+    console: quietConsole,
+    updatePresence() {},
     scheduleMusicSave() {},
     config: { leaveOnEmpty: true, emptyTimeout: 5 },
     setTimeout,
@@ -53,32 +57,23 @@ function guildMusicClass(overrides = {}) {
   });
 }
 
-test("downloader failure after EOF stops playback without repeat or autoplay and preserves queue", async () => {
+test("known downloader failure stops without repeat/autoplay and preserves queue", async () => {
   const notices = [];
-  const GuildMusic = guildMusicClass({ console: quietConsole, updatePresence() {} });
+  const GuildMusic = guildMusicClass();
   const state = Object.create(GuildMusic.prototype);
   const track = { title: "Blocked song" };
   const queue = [{ title: "Queued song" }];
-  let rejectDownload;
-  const download = new Promise((_, reject) => { rejectDownload = reject; });
-  download.kill = () => {};
   Object.assign(state, {
-    guild: { id: "guild", client: { channels: { cache: new Map([["text", { send: async message => notices.push(message) }]]) } } },
+    guild: { id: "guild", client: { channels: { cache: new Map([["text", { send: async m => notices.push(m) }]]) } } },
     notificationChannelId: "text", current: track, queue, playing: true,
-    streamProcess: download, loop: "track",
+    activePipeline: { error: new Error("403"), cancel() {} }, loop: "track",
     player: { stop() { state.onTrackEnd(); } }
   });
-  state.playNext = () => assert.fail("Failed downloads must not enter repeat or autoplay");
-  const ended = state.onTrackEnd();
-  assert.equal(state.current, track, "EOF must wait for downloader result");
-  rejectDownload(new Error("HTTP Error 403: Forbidden"));
-  await ended;
+  state.playNext = () => assert.fail("Known failures must not repeat");
+  await state.onTrackEnd();
   assert.equal(state.current, null);
-  assert.equal(state.playing, false);
   assert.equal(state.queue, queue);
   assert.equal(notices.length, 1);
-  state.failPlayback(track, new Error("late failure"));
-  assert.equal(notices.length, 1, "Late process callbacks must be ignored");
 });
 
 test("successful downloader completion advances once despite duplicate Idle events", async () => {
@@ -268,6 +263,8 @@ test("every registered slash command dispatches and responds with valid argument
     const responses = [];
     const effects = [];
     const state = {
+      invalidateNext() {},
+      queueChanged() {},
       current: { title: "Test track", author: "Artist", duration: 120 },
       queue: [{ title: "Queued one" }, { title: "Queued two" }],
       playing: true, volume: 80, totalTracksPlayed: 1,
@@ -331,4 +328,46 @@ test("new tracks reset old seek offsets while explicit restarts preserve theirs"
   assert.equal(state.resumeOffsetSeconds, 0);
   await state.playNext(null, { title: "Restarted", url: "https://example.com/audio", resumeAtSeconds: 27 });
   assert.equal(state.resumeOffsetSeconds, 27);
+});
+
+
+test("prefetched track is reused without another spawn and stop cancels both pipelines", async () => {
+  let spawned = 0, cancelled = 0;
+  const jobs = [];
+  const GuildMusic = guildMusicClass({ createAudioPipeline() {
+    spawned++;
+    const job = { stream: {}, inputType: "webm/opus", rate: 1, cancel() { cancelled++; } };
+    jobs.push(job); return job;
+  }, createAudioResource: () => ({ volume: { setVolume() {} } }) });
+  const state = Object.create(GuildMusic.prototype);
+  const first = { title: "first", url: "one" }, second = { title: "second", url: "two" };
+  Object.assign(state, { guild: { id: "test" }, queue: [second], current: first, playing: true,
+    loop: "off", nextGeneration: 0, totalTracksPlayed: 1, player: { play() {}, stop() {} } });
+  state.prepareNext(); state.prepareNext();
+  assert.equal(spawned, 1);
+  await state.onTrackEnd();
+  assert.equal(state.current, second);
+  assert.equal(spawned, 1);
+  assert.equal(state.activePipeline, jobs[0]);
+  state.queue.push(first); state.prepareNext();
+  state.stop();
+  assert.equal(cancelled, 2);
+  assert.equal(state.prefetch, null);
+  assert.equal(state.activePipeline, null);
+});
+
+test("queue mutation ignores stale autoplay searches and cancels speculative audio", async () => {
+  let resolve, cancelled = 0;
+  const GuildMusic = guildMusicClass({ resolveSuggestedTrack: () => new Promise(r => { resolve = r; }),
+    searchYouTube() {}, artworkFrom() {} });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { current: { title: "current" }, playing: true, queue: [], nextGeneration: 0,
+    autoplayTriedUrls: new Set(), loop: "off" });
+  state.prepareNext();
+  state.prefetch = { job: { cancel() { cancelled++; } } };
+  state.clearQueue();
+  resolve({ title: "stale", url: "stale" });
+  await new Promise(setImmediate);
+  assert.equal(state.queue.length, 0);
+  assert.equal(cancelled, 1);
 });
