@@ -185,7 +185,7 @@ test("shutdown waits for queued save, flushes latest state, then disconnects", a
   const api = vm.runInNewContext(`${source.slice(start, end)}\n${source.slice(shutdownStart, shutdownEnd)}\n({ loadMusicState, scheduleMusicSave, shutdown });`, {
     storage, favourites: { flush: async () => {} }, music: new Map(), console: { error() {} },
     setTimeout: callback => { scheduled = callback; return { unref() {} }; }, clearTimeout() {},
-    liveNowPlaying: new Map(), healthServer: { close() {} },
+    healthServer: { close() {} },
     client: { destroy: () => operations.push("disconnect") }, process: { exit: () => operations.push("exit") }
   });
   await api.loadMusicState();

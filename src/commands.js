@@ -26,7 +26,7 @@ const commands = [
   new SlashCommandBuilder().setName("leave").setDescription("Stop playback and disconnect from voice."),
   new SlashCommandBuilder().setName("queue").setDescription("View the current track and upcoming queue."),
   new SlashCommandBuilder().setName("shuffle").setDescription("Shuffle the tracks waiting in the queue."),
-  new SlashCommandBuilder().setName("nowplaying").setDescription("Show the track currently playing."),
+  new SlashCommandBuilder().setName("nowplaying").setDescription("Move the persistent player panel to this channel."),
   new SlashCommandBuilder().setName("volume").setDescription("Set playback volume from 0 to 200 percent.")
     .addIntegerOption(o => o.setName("percent").setDescription("Playback volume percentage").setRequired(true).setMinValue(0).setMaxValue(200)),
   new SlashCommandBuilder().setName("volup").setDescription("Increase volume by 10%."),
@@ -199,46 +199,6 @@ const formatDuration = seconds => {
   return `${Math.floor(value / 60)}:${String(value % 60).padStart(2, "0")}`;
 };
 
-const buildNowPlayingEmbed = ({
-  track,
-  elapsedSeconds = 0,
-  status = "idle",
-  title = "Now playing",
-  queuedCount,
-  queuedSummary,
-  requester
-}) => {
-  const duration = Number.isFinite(track?.duration) && track.duration > 0
-    ? `${formatDuration(elapsedSeconds)} / ${formatDuration(track.duration)}`
-    : `${formatDuration(elapsedSeconds)} elapsed`;
-  const progress = track?.duration > 0
-    ? ` (${Math.min(100, Math.floor(elapsedSeconds / track.duration * 100))}%)`
-    : "";
-
-  const embed = new EmbedBuilder()
-    .setColor(0x000000)
-    .setTitle(title)
-    .setAuthor({ name: "Music bot" })
-    .addFields(
-      { name: "Track", value: track?.title?.slice(0, 1024) || "Nothing is playing." },
-      { name: "Artist", value: track?.author?.slice(0, 1024) || "Not available", inline: true },
-      { name: "Position", value: `${duration}${progress}`, inline: true },
-      { name: "Playback", value: status },
-      { name: "Requested by", value: requester || "Unknown", inline: true }
-    )
-    .setTimestamp(track ? new Date(Date.now() - elapsedSeconds * 1000) : new Date());
-
-  if (queuedSummary) {
-    embed.addFields({ name: "Added to queue", value: queuedSummary.slice(0, 1024), inline: true });
-  } else if (queuedCount > 1) {
-    embed.addFields({ name: "Added to queue", value: `${queuedCount} tracks`, inline: true });
-  }
-  if (track?.thumbnail) {
-    embed.setThumbnail(track.thumbnail);
-  }
-  return embed;
-};
-
 const buildStatsEmbed = (state, uptime) => {
   return new EmbedBuilder()
     .setColor(0x5865F2)
@@ -254,7 +214,6 @@ const buildStatsEmbed = (state, uptime) => {
 module.exports = {
   websiteCommandGroups,
   buildHelpEmbed,
-  buildNowPlayingEmbed,
   buildPlaybackEmbed,
   buildQueueComponents,
   buildQueueEmbed,

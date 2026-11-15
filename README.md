@@ -52,7 +52,7 @@ Use slash commands in Discord. `/help` groups all 30 commands into Playback, Que
 - Audio effects: `/bassboost`, `/eightd`, `/nightcore`, `/echo`.
 - Info: `/help`, `/ping`, `/uptime`, `/stats`, `/set-notification-channel`.
 
-`/play query:<song or URL>` accepts YouTube searches, videos and playlists, and Spotify tracks, albums and playlists. Verified track duration must be 30 minutes or less. Spotify provides metadata, matched to YouTube audio, and requires Spotify client credentials. `/nowplaying` and `/play` show live track cards; `/queue` uses ten tracks per page with requester labels and invoker-only paging buttons. `/forward` accepts positive seconds or m:ss (default ten seconds). Effects restart playback at the current position and stay enabled until toggled off.
+`/play query:<song or URL>` accepts YouTube searches, videos and playlists, and Spotify tracks, albums and playlists. Verified track duration must be 30 minutes or less. Spotify provides metadata, matched to YouTube audio, and requires Spotify client credentials. `/play` updates the persistent server player panel and `/nowplaying` moves it to the current channel; `/queue` uses ten tracks per page with requester labels and invoker-only paging buttons. `/forward` accepts positive seconds or m:ss (default ten seconds). Effects restart playback at the current position and stay enabled until toggled off.
 
 Slash registration replaces the configured scope automatically on startup: run `npm start`. Set `GUILD_ID` for immediate guild registration, or leave it blank for global registration. Global updates can take time to propagate. No separate deploy command is necessary; any obsolete commands in that same scope are removed by the bulk replacement. Commands registered previously in a different scope must be removed in that scope separately.
 
@@ -108,3 +108,29 @@ Autoplay prefers the previous artist/title and channel. Edit `AUTOPLAY_REJECT_KE
 `src/music-utils.js` to change rejection rules for kids content and non-song results. Unrelated
 results are rejected even if no alternative remains. These are metadata heuristics, not a genre
 classifier. Recent suggestion URLs are tracked in memory for the current session.
+
+
+## Persistent Discord player panel
+
+Each server has one normal bot message with a gold queue embed, suggestions, and three button rows.
+The panel is edited in place; `/nowplaying` deletes it and posts a fresh copy in your current channel.
+Channel/message IDs are saved in the existing guild snapshot backend and reattached on restart.
+Missing messages are replaced when needed. Updates debounce for 800 ms and serialize per server;
+permission failures log once and wait for an explicit command before retrying.
+
+- Play resumes; Pause pauses; Next skips. Previous restarts after five seconds, otherwise returns
+  to one of the last 20 completed/skipped tracks and puts the current song back in the queue.
+- Loop cycles off, track, queue. Volume changes by 10 within 0-200. Rewind/Forward seek ten seconds.
+- Lyrics opens a private Genius search. Shuffle changes waiting tracks. Stop clears playback and
+  queue but keeps the voice connection and idle panel.
+- Effects opens a private multi-select; the chosen set is applied in one restart, keeping position.
+- Suggestions reuse autoplay filtering and are cached per track; selecting one queues it as you.
+- Heart adds/removes the current song from your favourites. My favourites opens your private list.
+
+All controls require the bot's voice channel, with Manage Server/Administrator override.
+History and suggestion caches are in memory. Favourites are global per user (maximum 25), saved
+atomically in `data/favourites.json`, independently of guild state, including when guild snapshots
+use Supabase. No database migration is required. A failed favourites load disables writes to protect
+existing data. Copy this file when moving PCs; it is not synced to Supabase. Run one bot process.
+The panel sends no mention notifications. Real Discord appearance and long-lived interaction
+behaviour require a manual check; automated tests use synthetic channels and interactions.

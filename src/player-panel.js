@@ -1,8 +1,11 @@
 
 const PANEL_PREFIX = "panel:";
 const short = (value, limit) => {
-  const characters = Array.from(String(value || "Unknown track").replace(/[\r\n]+/g, " "));
-  return characters.length > limit ? characters.slice(0, limit - 1).join("") + "\u2026" : characters.join("");
+  const text = String(value || "Unknown track").replace(/[\u0000-\u001f\u007f]+/g, " ");
+  if (text.length <= limit) return text;
+  let result = "";
+  for (const character of text) { if (result.length + character.length > limit - 1) break; result += character; }
+  return result + "\u2026";
 };
 const markdown = value => String(value).replace(/[\\[\]()*_~`|]/g, "\\$&");
 function trackLink(track) {
@@ -82,6 +85,7 @@ class PlayerPanel {
   wake() { this.blocked = false; this.scheduleUpdate(); }
   scheduleUpdate() {
     if (this.disposed || this.blocked || !this.state.panelChannelId) return;
+    if (JSON.stringify(buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() })) === this.signature) return;
     this.clearTimer(this.timer);
     this.timer = this.setTimer(() => { this.timer = null; void this.flush(); }, 800);
     this.timer?.unref?.();
@@ -106,14 +110,19 @@ class PlayerPanel {
     const channelId = this.state.panelChannelId;
     if (!channelId) return null;
     const channel = await this.getChannel(channelId);
+    if (this.disposed) return null;
     if (!channel?.send || !channel.messages?.fetch) throw new Error("Panel channel is unavailable.");
     let message = null;
     if (this.state.panelMessageId) {
       try { message = await channel.messages.fetch(this.state.panelMessageId); }
       catch (error) { if (error.code !== 10008) throw error; }
       if (message && message.author?.id && message.author.id !== this.state.guild?.client?.user?.id) throw new Error("Stored panel is not owned by this bot.");
-      if (!message) { this.identity(channelId, null); this.signature = null; }
+      if (!message) {
+        this.signature = create ? null : JSON.stringify(buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() }));
+        this.identity(channelId, null);
+      }
     }
+    if (this.disposed) return null;
     const payload = buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() });
     const signature = JSON.stringify(payload);
     if (message) {
@@ -121,6 +130,7 @@ class PlayerPanel {
       try { await message.edit(payload); }
       catch (error) {
         if (error.code !== 10008) throw error;
+        this.signature = create ? null : signature;
         this.identity(channelId, null);
         return create ? this.send(channel, payload, signature) : null;
       }
@@ -130,9 +140,11 @@ class PlayerPanel {
     return create ? this.send(channel, payload, signature) : null;
   }
   async send(channel, payload, signature) {
+    if (this.disposed) return null;
     const message = await channel.send(payload);
-    this.identity(channel.id, message.id);
+    if (this.disposed) { await message.delete().catch(() => {}); return null; }
     this.signature = signature;
+    this.identity(channel.id, message.id);
     return message;
   }
   ensure(channelId) {

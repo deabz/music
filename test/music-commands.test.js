@@ -312,7 +312,6 @@ test("every registered slash command dispatches and responds with valid argument
       formatUptime: () => "1s", scheduleMusicSave() {},
       config: { voiceChannelId: "voice", voiceGuildId: "guild" },
       resolveQuery: async () => [{ title: "Resolved", duration: 120 }],
-      postLiveNowPlaying: async () => { responses.push("Live card"); },
       replyWithQueue: async () => { responses.push("Queue card"); },
       searchYouTube: async () => []
     });
@@ -651,4 +650,25 @@ test("setting all effects restarts exactly once at the same paused position and 
   assert.equal(state.audioFilters.echo, false); assert.equal(state.audioFilters.nightcore, true);
   await state.setAudioFilters(["bassboost", "nightcore"]); assert.equal(starts, 1);
   await state.setAudioFilters([]); assert.equal(starts, 2);
+});
+
+
+test("panel channel/message IDs round-trip through the actual guild snapshot", () => {
+  const begin = source.indexOf("function musicSnapshot(state)");
+  const end = source.indexOf("async function writeMusicState", begin);
+  const snapshot = vm.runInNewContext(source.slice(begin, end) + "\nmusicSnapshot(state);", {
+    state: { player: { state: {} }, queue: [], loop: "off", volume: 80, panelChannelId: "channel", panelMessageId: "message" },
+    AudioPlayerStatus
+  });
+  assert.equal(snapshot.panelChannelId, "channel"); assert.equal(snapshot.panelMessageId, "message");
+  const GuildMusic = guildMusicClass(); const restored = Object.create(GuildMusic.prototype);
+  restored.restorePanel(snapshot);
+  assert.equal(restored.panelChannelId, "channel"); assert.equal(restored.panelMessageId, "message");
+});
+
+test("global interaction listener routes persistent controls before slash dispatch", async () => {
+  let calls = 0;
+  const handler = eventHandler("InteractionCreate", { handlePanelInteraction: async () => { calls++; return true; },
+    handleCommand: () => assert.fail("Panel must not dispatch as a slash command") });
+  await handler({}); assert.equal(calls, 1);
 });

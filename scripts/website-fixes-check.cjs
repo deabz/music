@@ -42,7 +42,7 @@ for(const path of ['/status','/dashboard','/not-a-page']) {
     const before=await page.locator('.aurora-one').evaluate(e=>getComputedStyle(e).transform);
     await page.waitForTimeout(150);
     assert.notEqual(before,await page.locator('.aurora-one').evaluate(e=>getComputedStyle(e).transform));
-    if(path==='/status') {assert.equal(await page.locator('body').getAttribute('data-connection'),state);assert.notEqual(await page.locator('#version').textContent(),'—');}
+    if(path==='/status') {assert.equal(await page.locator('body').getAttribute('data-connection'),state);assert.notEqual(await page.locator('#version').textContent(),'\u2014');}
     await page.screenshot({path:`${out}/${width}-${path.slice(1)}-${state}.png`});
   }
 }

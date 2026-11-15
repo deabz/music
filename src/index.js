@@ -840,19 +840,20 @@ client.once(Events.ClientReady, async ready => {
   await loadMusicState();
   await favourites.load();
   for (const [guildId, snapshot] of Object.entries(savedMusicStates)) {
+    let state;
     try {
       if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid guild snapshot.");
       const guild = await ready.guilds.fetch(guildId);
       if (!guild) continue;
-      const state = getMusic(guild);
+      state = getMusic(guild);
       state.restorePanel?.(snapshot);
       if (typeof snapshot.voiceChannelId === "string") {
       const channel = await guild.channels.fetch(snapshot.voiceChannelId);
       if (!channel?.isVoiceBased()) throw new Error("Saved voice channel is unavailable.");
       await state.restore(snapshot, channel);
       }
-      await state.panel?.reattach();
     } catch (error) { console.error(`[persistence:${guildId}] Could not restore music state: ${error.message}`); }
+    finally { await state?.panel?.reattach(); }
   }
   try {
     if (config.autoJoin && config.voiceChannelId && config.voiceGuildId) {
@@ -1362,7 +1363,7 @@ async function shutdown(exitCode = 0) {
   shutdownPromise = (async () => {
     try {
       await musicSaveChain;
-      await writeMusicState();
+      await writeMusicState().catch(error => console.error(`[persistence] Shutdown save failed: ${error.message}`));
       await favourites.flush();
     } catch (error) { console.error(`[persistence] Shutdown save failed: ${error.message}`); }
     finally { clearTimeout(deadline); cleanup(); process.exit(exitCode); }

@@ -74,3 +74,32 @@ test("permission errors log once and stay blocked until an explicit command", as
   f.denied(false); await f.manager.ensure("channel");
   assert.equal(f.calls.sends, 1);
 });
+test("edits serialize while one is pending and unchanged state does not schedule more requests", async () => {
+  const f = fixture(); await f.manager.ensure("channel");
+  f.manager.scheduleUpdate(); assert.equal(f.timers.size, 0);
+  let release, active = 0, maximum = 0, edits = 0;
+  const gate = new Promise(resolve => { release = resolve; });
+  f.message.edit = async () => { active++; maximum = Math.max(maximum, active); edits++; if (edits === 1) await gate; active--; };
+  f.state.volume = 90; const first = f.manager.flush(); await new Promise(setImmediate);
+  f.state.volume = 100; const second = f.manager.flush();
+  release(); await Promise.all([first, second]);
+  assert.equal(maximum, 1); assert.equal(edits, 2);
+});
+test("missing messages on edit recover and disposed managers cannot send after an awaited fetch", async () => {
+  const f = fixture(); await f.manager.ensure("channel");
+  f.message.edit = async () => { throw { code: 10008 }; };
+  f.state.volume = 90; await f.manager.flush(); assert.equal(f.calls.sends, 2);
+  let release;
+  const stopped = fixture({ getChannel: () => new Promise(resolve => { release = resolve; }) });
+  const pending = stopped.manager.ensure("channel"); await new Promise(setImmediate);
+  stopped.manager.dispose(); release(stopped.channel); await pending;
+  assert.equal(stopped.calls.sends, 0);
+});
+test("Discord builders accept the component payload and Unicode text obeys code-unit limits", () => {
+  const { ActionRowBuilder } = require("discord.js");
+  const state = { current: track(), queue: [], loop: "off", panelSuggestions: [{ ...track("\uD83C\uDFB5".repeat(120)), author: "\uD83C\uDFB5".repeat(120), id: "short" }] };
+  const payload = buildPlayerPanel(state);
+  for (const row of payload.components) assert.doesNotThrow(() => new ActionRowBuilder(row).toJSON());
+  assert.ok(payload.components[0].components[0].options[0].label.length <= 100);
+  assert.ok(payload.components[0].components[0].options[0].description.length <= 100);
+});
