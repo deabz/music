@@ -19,13 +19,24 @@ function streamFailureDiagnostic(state, track, error, stage = "player") {
   const secrets = [...(job?.diagnosticSecrets || []), ...Object.entries(process.env)
     .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|API_KEY/i.test(key)).map(([, value]) => value)];
   const redact = value => redactDiagnostic(value, secrets);
-  return JSON.stringify({ guild: state.guild?.id, track: redact(track?.title), stage: error.stage || stage,
+  return JSON.stringify({ guild: state.guild?.id, track: redact(track?.title), generation: job?.playbackGeneration ?? job?.generationId ?? null, stage: error.stage || stage,
     message: redact(error.message), effects: job?.filters || state.audioFilters,
     position: job?.offset ?? state.resumeOffsetSeconds ?? 0,
     exits: job?.exits || {}, commands: (job?.commands || []).map(command => ({ stage: command.stage,
       executable: redact(command.executable), args: command.args.map(redact) })),
     ytdlpStderr: redact((job?.stderr || error.stderr || "").slice(-2000)),
     ffmpegStderr: redact((job?.filterStderr || "").slice(-2000)) });
+}
+function streamEndDiagnostic(state, track, job, reason, resource) {
+  const offset = job?.offset ?? state.resumeOffsetSeconds ?? 0;
+  const delivered = (resource?.playbackDuration || 0) / 1000 * (job?.rate || state.resourcePlaybackRate || 1);
+  const secrets = [...(job?.diagnosticSecrets || []), ...Object.entries(process.env)
+    .filter(([key]) => /TOKEN|SECRET|PASSWORD|COOKIE|API_KEY/i.test(key)).map(([, value]) => value)];
+  return JSON.stringify({ guild: state.guild?.id, track: redactDiagnostic(track?.title, secrets),
+    generation: job?.playbackGeneration ?? job?.generationId ?? null, reason,
+    deliveredSeconds: delivered, expectedSeconds: Math.max(0, (track?.duration || 0) - offset),
+    positionSeconds: offset + delivered,
+    ytdlpExitCode: job?.exits?.extract?.code ?? null, ffmpegExitCode: job?.exits?.ffmpeg?.code ?? null });
 }
 const NATURAL_END_TOLERANCE_SECONDS = 5;
 function isPipeFailure(detail = "") {
@@ -37,4 +48,4 @@ function isExpectedPipeFailure(detail, { intentionallyAborted = false, naturalAu
   return intentionallyAborted || naturalAudioEnd || (Number.isFinite(durationSeconds) && durationSeconds > 0
     && positionSeconds >= Math.max(0, durationSeconds - NATURAL_END_TOLERANCE_SECONDS));
 }
-module.exports = { classifyStreamFailure, isPipeFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, redactDiagnostic, streamFailureDiagnostic };
+module.exports = { classifyStreamFailure, isPipeFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, redactDiagnostic, streamFailureDiagnostic, streamEndDiagnostic };

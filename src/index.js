@@ -8,7 +8,7 @@ const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
 const { createPlayerPanel, buildPlayConfirmation } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
-const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic } = require("./playback-errors");
+const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic, streamEndDiagnostic } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
 const { parseTransitionSettings, shouldFadeIn, TransitionController, NATURAL_HANDOVER_GRACE_MS } = require("./transitions");
@@ -295,7 +295,11 @@ class GuildMusic {
     this.connection = connection;
     this.savedVoiceChannelId = channel.id;
     connection.subscribe(this.player);
-    connection.on("error", error => console.error(`[voice:${this.guild.id}] ${error.stack || error.message}`));
+    connection.on("error", error => {
+      if (this.connection === connection && generation === (this.voiceGeneration || 0)) {
+        console.error(`[stream-failure] ${streamFailureDiagnostic(this, this.current, error, "voice")}`);
+      }
+    });
     connection.on("stateChange", (before, next) => {
       console.log(`[${new Date().toISOString()}] [voice:${this.guild.id}] ${before.status} -> ${next.status}`);
       if (shuttingDown || this.connection !== connection || this.connectPromise) return;
@@ -467,6 +471,7 @@ class GuildMusic {
   cancelPrefetch() {
     const prefetch = this.prefetch;
     this.prefetch = null;
+    if (prefetch?.job) this.recordStreamEnd(prefetch.job.error ? "error" : "intentional abort", prefetch.job, prefetch.track, null);
     prefetch?.job?.cancel?.();
   }
 
@@ -484,8 +489,13 @@ class GuildMusic {
       if (this.prefetch?.track === track && this.prefetch?.job) return;
       this.cancelPrefetch();
       const job = createAudioPipeline(track, this.audioFilters);
+      job.track = track;
       this.prefetch = { track, job };
-      job.onFailure = () => {}; // Retain error for activation; never log speculative aborts.
+      job.onFailure = error => {
+        this.recordStreamEnd("error", job, track, null);
+        console.error(`[stream-failure] ${streamFailureDiagnostic({ ...this, activePipeline: job }, track, error)}`);
+      };
+      job.onDiagnostic = error => console.error(`[stream-failure] ${streamFailureDiagnostic({ ...this, activePipeline: job }, track, error)}`);
       return;
     }
     if (!allowSuggestion || this.suggestionGeneration === this.nextGeneration) return;
@@ -514,9 +524,16 @@ class GuildMusic {
       });
   }
 
+  recordStreamEnd(reason, job = this.activePipeline, track = this.current || job?.track, resource = this.resource) {
+    if (!job || job.endLogged) return;
+    job.endLogged = true;
+    console.log(`[stream-end] ${streamEndDiagnostic(this, track, job, reason, resource)}`);
+  }
+
   cancelActive() {
     this.transitions?.cancel();
     const pipeline = this.activePipeline;
+    if (pipeline) this.recordStreamEnd(pipeline.error ? "error" : pipeline.naturalAudioEnd ? "natural" : "intentional abort");
     this.activePipeline = null;
     this.resource = null;
     pipeline?.cancel?.();
@@ -555,7 +572,9 @@ class GuildMusic {
     try {
       job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
       this.activePipeline = job;
+      job.track = next;
       job.playbackGeneration = generation;
+      job.onDiagnostic = error => console.error(`[stream-failure] ${streamFailureDiagnostic({ ...this, activePipeline: job }, next, error)}`);
       const active = () => this.activePipeline === job && this.playbackGeneration === generation;
       job.shouldIgnoreFailure = error => {
         const expected = isExpectedPipeFailure(error.stderr || error.message, {
@@ -596,6 +615,7 @@ class GuildMusic {
       scheduleMusicSave();
     } catch (error) {
       if (recoverable && (!job || this.activePipeline === job) && !job?.intentionallyAborted) {
+        this.recordStreamEnd("error");
         console.error(`[stream-failure] ${streamFailureDiagnostic(this, next, error)}`);
         throw error;
       }
@@ -652,6 +672,7 @@ class GuildMusic {
 
   failPlayback(track, error, { allowResume = true } = {}) {
     if (!track || this.current !== track) return;
+    this.recordStreamEnd("error");
     console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
     const detail = [this.activePipeline?.stderr, this.activePipeline?.filterStderr, error.stderr, error.message].filter(Boolean).join("\n");
     const reason = classifyStreamFailure(detail);
@@ -687,6 +708,7 @@ class GuildMusic {
   }
 
   retryShortStream(track, error) {
+    this.recordStreamEnd("early end");
     console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
     const detail = [this.activePipeline?.stderr, this.activePipeline?.filterStderr, error.stderr, error.message].filter(Boolean).join("\n");
     const reason = classifyStreamFailure(detail);
@@ -723,6 +745,7 @@ class GuildMusic {
     if (job?.error) return this.failPlayback(endedTrack, job.error);
     const position = playbackPosition(this);
     if (Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
+      this.recordStreamEnd("early end");
       const error = new Error(`Audio ended early at ${position.toFixed(1)}s of ${endedTrack.duration}s.`);
       if (this.canResumeEarly(endedTrack, error)) return this.resumeEarlyEnd(endedTrack, error);
       if (this.restartRecovery) return this.rollbackRestart(error);
@@ -730,6 +753,7 @@ class GuildMusic {
       return this.failPlayback(endedTrack, error, { allowResume: false });
     }
     if (job) job.naturalAudioEnd = true;
+    this.recordStreamEnd("natural");
     this.shortStreamFailures = 0;
     delete endedTrack.streamRetry;
     delete endedTrack.http403Retries;
