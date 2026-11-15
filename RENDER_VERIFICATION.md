@@ -119,3 +119,77 @@ four files were sanitized (three synthetic-path fixtures and the asset generator
 The generator now uses portable DejaVu font names rather than a Windows font path.
 The earlier effects reports already used relative source references and contained
 no machine-local username/path. All 234 tests and source checks pass at this stage.
+
+## Outstanding gate investigation (2026-11-15)
+
+No merge, push, rebase or history rewrite was performed. Potential matched values
+were examined privately in memory; this report and scanner output contain only
+metadata. No genuine credential was identified. No rotation is warranted by the
+reviewed findings. If a future finding is confirmed genuine, stop release, reset
+it at the provider, replace deployment configuration, review access, and obtain
+explicit approval before any history remediation. None of those actions was taken.
+
+### Original findings
+
+| File | Revision | Match type | Investigation and disposition |
+| --- | --- | --- | --- |
+| test/health-server.test.js | working tree | Generic Bearer literal | Localhost-only invalid authorization fixtures; assertions require 401/429 and no control execution. Replaced with generated runtime fixtures. |
+| test/health-server.test.js | 8f7b5556c6ddae07b03eca3d4071ad9b5c4116fe | Generic Bearer literal | Same harmless local HTTP fixtures; exact file fingerprint, line and rule reviewed. History preserved. |
+| test/health-server.test.js | 74ca3cf5e69e6688518e794554dfe51693217ae6 | Generic Bearer literal | Same harmless local HTTP fixtures; exact file fingerprint, line and rule reviewed. History preserved. |
+| .env.example | d9b130d956f37d3dc890c2ae4fbc6ced207db850 | Credential assignment | Human instruction placeholder, no credential structure. |
+| .env.example | 3264661403b510b4449a5d1aca003bb4d86598b5 | Credential assignment | Human instruction placeholder, no credential structure. |
+| .env.example | 39b599250909dbc3338b59433722a97cdd8174fb | Credential assignment | Human instruction placeholder, no credential structure. |
+| .env.example | 659c70d14539ab8bb49a89bb0ae712b0805c753e | Credential assignment | Human instruction placeholder, no credential structure. |
+| .env.example | 6f2a647fa37fa0ccfb5656710c45647ef12db836 | Credential assignment | Human instruction placeholder, no credential structure. |
+
+The current .env.example has only comments and empty settings, verified by a test.
+The five historical instruction values match anchored placeholder syntax rather
+than an unrestricted substring exemption. Historical findings remain visible as
+reviewed evidence; no commits or files were removed to satisfy the scanner.
+
+### Additional findings and remediation
+
+The expanded scan also reviewed valid localhost-only HTTP authentication fixtures
+in the two original test revisions and ff91af69f37dc75bf4c35565eddc4ccc2825b81c
+and ab4ce9a3307885c3ae143cb5c7e72f19595c0ac1. Their values match the credential
+configured for the same in-process stub server. Current tests now generate both
+valid and invalid credentials at runtime, preserving success, denial and rate-limit
+coverage. Production authentication and playback code were not changed.
+
+Two earlier templates contain replacement instructions: music-bot/.env.example at
+9d6d6c37ebdcdc2251165797655297ac657f88d8 and .env.node.example at
+a5f6fee141e463861db9db1952b7db64f790705d. These are exact-content reviewed
+placeholder findings. src/spotify.js uses a runtime Bearer interpolation, with no
+embedded credential; the scanner recognizes its syntactic runtime reference.
+
+Added npm run scan:secrets with value-free metadata output. It scans tracked and
+nonignored untracked working files, and all reachable Git blobs, commits and tags
+across all refs. Protected tracked paths and protected path history fail closed
+before content scanning; actual .env and cookies.txt were not read. Exceptions for
+historical fixtures/templates require matching path, LF-normalized whole-file
+SHA256, line and generic rule. Structured Discord tokens, Supabase keys, JWTs,
+cookie lines and private keys are never exempted. Changed content invalidates a
+review. Pattern scanning is evidence, not proof that arbitrary secrets cannot exist.
+
+### Verification and remaining release gates
+
+| Gate | Result |
+| --- | --- |
+| Complete tests | PASS: 241 tests, zero failures/skips; original 234 preserved plus seven scanner regression tests. |
+| npm run check | PASS: UTF-8 and source syntax checks. |
+| Working-tree/full-history secrets | PASS with documented reviews; no unresolved candidates or scanner errors. Initial reviewed scan covered 127 commits and 604 content objects; the final local commit adds its own objects. |
+| Protected files | PASS: no protected tracked paths or .env/cookies.txt/data path history. |
+| Attribution | PASS: no attribution matches in origin/main..main or origin/main..render-ready commit bodies. |
+| Remote | https://github.com/deabz/music.git; gh reports PUBLIC. Future publication requires explicit approval. |
+| Fast-forward compatibility | PASS against local main: main is an ancestor of render-ready. No merge performed; remote freshness was not established by fetching. |
+| Docker/Linux execution | UNVERIFIED: Docker/Podman not installed; WSL returned no installed distribution. Existing static review and mocked Linux tests remain the available evidence. |
+| Completed phases | All five phase commits remain ancestors: c0e3f71, 86379e2, ada9098, 01dd9f6, 81621b2. Existing Docker, Render, diagnostics, smoke results and live-checklist work retained. |
+| Live Discord/Render | UNVERIFIED; prior smoke results above were retained, not rerun or represented as new live verification. |
+
+Release readiness: the secret false-positive blocker is resolved through explicit,
+scoped review without rewriting history. Public publication approval and Linux
+image/runtime validation remain outstanding. Nyx is not yet fully release-verified.
+The branch is locally fast-forward compatible, but no merge or push is authorized
+in this task. Review final Git status and commit identity with the accompanying
+summary. No dependency, node_modules, protected secret file, or bot runtime changes
+were made during this investigation.

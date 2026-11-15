@@ -4,6 +4,10 @@ const { createHealthServer } = require("../src/health-server");
 const { healthPage } = require("../src/health-page");
 const { dashboardPage } = require("../src/dashboard-page");
 
+// Invalid credentials are generated only in memory for refusal/rate-limit tests.
+const dashboardCredential = require("node:crypto").randomBytes(24).toString("hex");
+const invalidAuthorization = () => "Bearer " + require("node:crypto").randomBytes(24).toString("hex");
+
 async function withServer(options, run) {
   const server = createHealthServer({
     page: "<main>public page</main>",
@@ -62,11 +66,11 @@ test("links the favicon from the public and dashboard pages", () => {
 });
 
 test("requires the dashboard token and accepts authorized read and control requests", async () => {
-  await withServer({ dashboardToken: "test-dashboard-token" }, async base => {
+  await withServer({ dashboardToken: dashboardCredential }, async base => {
     const denied = await fetch(`${base}/api/dashboard`);
     assert.equal(denied.status, 401);
 
-    const headers = { Authorization: "Bearer test-dashboard-token" };
+    const headers = { Authorization: "Bearer " + dashboardCredential };
     const dashboard = await fetch(`${base}/api/dashboard`, { headers });
     assert.deepEqual(await dashboard.json(), { guilds: [{ id: "123", name: "Test" }] });
 
@@ -89,11 +93,11 @@ test("rejects dashboard controls when no access token is configured", async () =
 });
 
 test("validates dashboard action request JSON", async () => {
-  await withServer({ dashboardToken: "test-dashboard-token" }, async base => {
+  await withServer({ dashboardToken: dashboardCredential }, async base => {
     const response = await fetch(`${base}/api/dashboard/actions`, {
       method: "POST",
       headers: {
-        Authorization: "Bearer test-dashboard-token",
+        Authorization: "Bearer " + dashboardCredential,
         "Content-Type": "text/plain"
       },
       body: "{}"
@@ -137,15 +141,15 @@ test("health readiness, schema, pretty JSON, redirect and private-field filterin
 
 test("both dashboard endpoints reject missing, wrong, URL and malformed tokens; failures rate limit", async () => {
   let controls = 0;
-  await withServer({ dashboardToken: "synthetic-secret", controlDashboard: async () => { controls++; } }, async base => {
+  await withServer({ dashboardToken: dashboardCredential, controlDashboard: async () => { controls++; } }, async base => {
     for (const [path, options] of [
       ["/api/dashboard?token=synthetic-secret", {}],
       ["/api/dashboard/actions", { method: "POST" }],
-      ["/api/dashboard", { headers: { Authorization: "Bearer wrong" } }],
+      ["/api/dashboard", { headers: { Authorization: invalidAuthorization() } }],
       ["/api/dashboard/actions", { method: "POST", headers: { Authorization: "Basic synthetic-secret" } }],
-      ["/api/dashboard", { headers: { Authorization: "Bearer equally-wrong---" } }]
+      ["/api/dashboard", { headers: { Authorization: invalidAuthorization() } }]
     ]) assert.equal((await fetch(base + path, options)).status, 401);
-    const blocked = await fetch(`${base}/api/dashboard`, { headers: { Authorization: "Bearer synthetic-secret" } });
+    const blocked = await fetch(`${base}/api/dashboard`, { headers: { Authorization: "Bearer " + dashboardCredential } });
     assert.equal(blocked.status, 429);
     assert.ok(Number(blocked.headers.get("retry-after")) > 0);
     assert.equal(controls, 0);
@@ -153,11 +157,11 @@ test("both dashboard endpoints reject missing, wrong, URL and malformed tokens; 
 });
 
 test("unexpected dashboard failures never expose stack traces or paths", async () => {
-  await withServer({ dashboardToken: "synthetic-secret", getDashboard: async () => { throw new Error("private-path-and-secret"); } }, async base => {
+  await withServer({ dashboardToken: dashboardCredential, getDashboard: async () => { throw new Error("private-path-and-secret"); } }, async base => {
     const original = console.error;
     console.error = () => {};
     try {
-      const result = await fetch(`${base}/api/dashboard`, { headers: { Authorization: "Bearer synthetic-secret" } });
+      const result = await fetch(`${base}/api/dashboard`, { headers: { Authorization: "Bearer " + dashboardCredential } });
       assert.equal(result.status, 500);
       assert.deepEqual(await result.json(), { error: "The dashboard request could not be completed." });
     } finally { console.error = original; }
