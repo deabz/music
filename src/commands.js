@@ -38,7 +38,8 @@ const commands = [
     .addIntegerOption(o => o.setName("position").setDescription("The position of the song to remove").setRequired(true).setMinValue(1)),
   new SlashCommandBuilder().setName("forward").setDescription("Fast forward the current track.")
     .addStringOption(o => o.setName("time").setDescription("Time to forward (e.g. 10 or 1:30)").setRequired(false)),
-  new SlashCommandBuilder().setName("lyrics").setDescription("Show the currently playing song's lyrics link."),
+  new SlashCommandBuilder().setName("lyrics").setDescription("Find lyrics; opens a song popup when idle.")
+    .addStringOption(option => option.setName("song").setDescription("Artist - Song title, or search text").setMinLength(2).setMaxLength(100)),
   new SlashCommandBuilder().setName("move").setDescription("Move a track in the queue.")
     .addIntegerOption(o => o.setName("from").setDescription("Current position").setRequired(true).setMinValue(1))
     .addIntegerOption(o => o.setName("to").setDescription("New position").setRequired(true).setMinValue(1)),

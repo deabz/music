@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const { createLyricsController } = require("./lyrics-controller");
+const lyrics = createLyricsController({ isReady: () => startupComplete && !shuttingDown });
 const storage = require("./storage");
 const { FavouritesStore } = require("./favourites");
 const favourites = new FavouritesStore();
@@ -1049,18 +1051,9 @@ const handleCommand = async interaction => {
       return reply(interaction, "The queue has been cleared.");
     }
     if (interaction.commandName === "lyrics") {
-      if (!state.current) return reply(interaction, "No song is playing right now.");
-      const track = state.current;
-      const geniusUrl = buildGeniusSearchUrl(track.title, track.author);
-      const embed = new EmbedBuilder()
-        .setTitle(track.title)
-        .setURL(geniusUrl)
-        .setAuthor({ name: track.author })
-        .setDescription(`[Open lyrics on Genius](${geniusUrl})`)
-        .setColor("#0099ff");
-
-      return reply(interaction, { embeds: [embed] });
+      return lyrics.open(interaction, { track: state.current, song: interaction.options.getString("song") });
     }
+
     if (interaction.commandName === "search") {
       const query = interaction.options.getString("query", true);
       await interaction.deferReply();
@@ -1159,6 +1152,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 const handlePanelInteraction = createPanelInteractionHandler({ getMusic, favourites, isReady: () => startupComplete && !shuttingDown });
 
 client.on(Events.InteractionCreate, async interaction => {
+  if (await lyrics.handleModal(interaction)) return;
   if (await handlePanelInteraction(interaction)) return;
   if (!interaction.isChatInputCommand()) return;
   await handleCommand(interaction);

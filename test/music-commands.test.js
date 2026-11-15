@@ -17,6 +17,7 @@ function eventHandler(event, overrides = {}) {
   vm.runInNewContext(source.slice(start, end), {
     client: { on: (_, callback) => { handler = callback; } },
     Events: { [event]: event },
+    lyrics: { handleModal: async () => false },
     commands,
     playbackPosition: require("../src/playback-position").playbackPosition,
     AudioPlayerStatus,
@@ -31,6 +32,7 @@ function commandHandler(state, overrides = {}) {
   const end = source.indexOf("\nclient.on(Events.VoiceStateUpdate", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nhandleCommand;`, {
     buildPlayConfirmation: require("../src/player-panel").buildPlayConfirmation,
+    lyrics: { open: interaction => interaction.reply({ content: "Mock lyrics" }) },
     startupComplete: true, shuttingDown: false,
     getMusic: () => state,
     musicAccessError: () => null,

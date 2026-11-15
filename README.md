@@ -147,3 +147,13 @@ use Supabase. No database migration is required. A failed favourites load disabl
 existing data. Copy this file when moving PCs; it is not synced to Supabase. Run one bot process.
 Markdown in titles is escaped, title mentions are neutralized, and the panel sends no mention notifications. Real Discord appearance and long-lived interaction
 behaviour require a manual check; automated tests use synthetic channels and interactions.
+
+### Song lyrics
+
+`/lyrics` finds community-sourced lyrics from LRCLIB for the playing song. Use
+`/lyrics song:Artist - Title` or free-text search for another song. When nothing
+is playing, a popup asks for the song. No API key or environment variable is needed.
+Lyrics may be missing; a Genius search link is offered when no match is found.
+Long lyrics have invoker-only Previous/Next buttons lasting 10 minutes (10 pages
+maximum). Lookups have a per-user 5-second cooldown. Lyrics are cached only in
+memory (100 entries; missing results expire after 10 minutes), never saved to disk.
