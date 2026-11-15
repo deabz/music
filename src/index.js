@@ -205,26 +205,71 @@ class GuildMusic {
     });
   }
 
-  setAudioFilter(filter, enabled) {
+  setAudioFilter(filter, enabled, onFailure) {
     const selected = new Set(Object.keys(this.audioFilters).filter(name => this.audioFilters[name]));
     if (enabled) selected.add(filter); else selected.delete(filter);
-    return this.setAudioFilters([...selected]);
+    return this.setAudioFilters([...selected], onFailure);
   }
 
-  async setAudioFilters(selected) {
+  async setAudioFilters(selected, onFailure) {
     const names = ["bassboost", "eightd", "nightcore", "echo"];
     if (!Array.isArray(selected) || selected.some(name => !names.includes(name))) throw new Error("Invalid effects selection.");
     const filters = Object.fromEntries(names.map(name => [name, selected.includes(name)]));
     if (names.every(name => Boolean(this.audioFilters[name]) === filters[name])) return;
-    const position = playbackPosition(this);
-    const wasPaused = this.player.state.status === AudioPlayerStatus.Paused;
-    this.invalidateNext();
-    this.audioFilters = filters;
     if (this.playing && this.current) {
-      this.pauseOnRestore = wasPaused;
-      await this.playNext(null, { ...this.current, resumeAtSeconds: position });
-    }
+      await this.restartCurrent(filters, playbackPosition(this), onFailure);
+    } else { this.invalidateNext(); this.audioFilters = filters; }
     scheduleMusicSave();
+  }
+
+  async restartCurrent(filters, position, onFailure, { rollbackOnly = false } = {}) {
+    if (this.restartTransaction) throw new Error("Please wait; a stream restart is in progress.");
+    if (!this.current) throw new Error("Nothing is playing.");
+    const operation = this.restartTransaction = {};
+    const track = { ...this.current };
+    const previous = { ...this.audioFilters };
+    const previousPosition = playbackPosition(this);
+    const paused = this.player.state.status === AudioPlayerStatus.Paused || this.pauseOnRestore;
+    this.restartRecovery = null;
+    const attempt = async (selected, start = position) => {
+      this.audioFilters = { ...selected };
+      this.current = null; // Old Idle cannot advance or fail the replacement.
+      this.invalidateNext();
+      this.cancelActive();
+      this.player.stop?.(true);
+      this.pauseOnRestore = paused;
+      await this.playNext(null, { ...track, resumeAtSeconds: start }, { recoverable: true });
+    };
+    try {
+      try { await attempt(filters); }
+      catch (error) {
+        if (this.restartTransaction !== operation) return;
+        if (rollbackOnly) { this.failPlayback(this.current, error); throw error; }
+        try { await attempt(previous, previousPosition); }
+        catch (rollbackError) { this.failPlayback(this.current, rollbackError); }
+        throw new Error("The stream change could not be applied; previous settings were restored.");
+      }
+      if (this.restartTransaction === operation && this.current) {
+        this.restartRecovery = { track: this.current, previous, position: previousPosition, paused, onFailure };
+      }
+    } finally {
+      if (this.restartTransaction === operation) this.restartTransaction = null;
+      scheduleMusicSave();
+    }
+  }
+
+  async rollbackRestart(error) {
+    const recovery = this.restartRecovery;
+    if (!recovery || recovery.track !== this.current || this.restartTransaction) return;
+    this.restartRecovery = null;
+    console.error(`[stream-failure] ${streamFailureDiagnostic(this, this.current, error)}`);
+    try {
+      this.pauseOnRestore = recovery.paused;
+      await this.restartCurrent(recovery.previous, recovery.position, null, { rollbackOnly: true });
+      this.restartRecovery = null; // A rollback is never itself rolled back.
+    } catch { /* restartCurrent already invokes normal handling if both attempts fail. */ }
+    try { await recovery.onFailure?.("The stream change failed; previous audio settings were restored if playback could be recovered."); }
+    catch { /* Expired interaction tokens must not affect playback recovery. */ }
   }
 
   async connect(channel) {
@@ -349,10 +394,7 @@ class GuildMusic {
     if (!this.current) throw new Error("Nothing is playing.");
     const maxPosition = Math.max(0, this.current.duration - 2);
     const position = Math.min(seconds, maxPosition);
-    const wasPaused = this.player.state.status === AudioPlayerStatus.Paused;
-    this.resumeOffsetSeconds = position;
-    this.pauseOnRestore = wasPaused;
-    await this.playNext(null, { ...this.current, resumeAtSeconds: position });
+    await this.restartCurrent(this.audioFilters, position);
   }
 
   adjustVolume(amount) {
@@ -479,7 +521,7 @@ class GuildMusic {
     pipeline?.cancel?.();
   }
 
-  async playNext(endedTrack = null, trackToPlay = null) {
+  async playNext(endedTrack = null, trackToPlay = null, { recoverable = false } = {}) {
     if (shuttingDown || (this.current && this.playing && !trackToPlay)) return;
     clearTimeout(this.emptyTimer);
     const next = trackToPlay || this.queue.shift();
@@ -520,9 +562,10 @@ class GuildMusic {
         return expected;
       };
       job.onFailure = error => {
-        if (this.activePipeline === job && !job.cancelled) this.failPlayback(next, error);
+        if (this.activePipeline === job && !job.cancelled && !recoverable) this.failPlayback(next, error);
       };
       if (!job.formatReady) await job.ready;
+      if (recoverable && job.audioReady) await job.audioReady;
       if (this.activePipeline !== job || job.intentionallyAborted) return;
       if (job.error) throw job.error;
       const resource = createAudioResource(job.stream, { inputType: job.inputType, inlineVolume: true });
@@ -537,9 +580,21 @@ class GuildMusic {
       }
       console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""} input=${job.inputType}`);
       this.player.play(resource);
+      if (recoverable) job.onFailure = error => {
+        if (this.activePipeline === job && !job.intentionallyAborted) {
+          if (this.restartTransaction) job.restartError = error;
+          else if (this.restartRecovery) void this.rollbackRestart(error);
+          else this.failPlayback(next, error);
+        }
+      };
+      if (job.restartError || job.error) throw job.restartError || job.error;
       this.panel?.trackStarted(next, { restoring: Boolean(this.restorePromise) });
       scheduleMusicSave();
     } catch (error) {
+      if (recoverable && (!job || this.activePipeline === job) && !job?.intentionallyAborted) {
+        console.error(`[stream-failure] ${streamFailureDiagnostic(this, next, error)}`);
+        throw error;
+      }
       if ((!job || this.activePipeline === job) && !job?.intentionallyAborted) this.failPlayback(next, error);
     }
   }
@@ -607,10 +662,14 @@ class GuildMusic {
   async onTrackEnd() {
     const endedTrack = this.current;
     if (shuttingDown || !endedTrack) return;
+    if (this.restartTransaction) return;
     this.transitions?.cancel();
     const job = this.activePipeline;
     if (job?.intentionallyAborted) return;
-    if (job?.error) return this.failPlayback(endedTrack, job.error);
+    if (job?.error) return this.restartRecovery ? this.rollbackRestart(job.error) : this.failPlayback(endedTrack, job.error);
+    if (this.restartRecovery && playbackPosition(this) < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
+      return this.rollbackRestart(new Error("Restarted stream ended early."));
+    }
     if (this.isShortStream()) return this.retryShortStream(endedTrack, new Error("Audio ended within three seconds."));
     const position = playbackPosition(this);
     // A successful pipeline EOF can expose inaccurate duration metadata. Never
@@ -627,6 +686,7 @@ class GuildMusic {
     // Pipeline EOF already requires successful child exit; do not await anything here.
     console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Ended track=${JSON.stringify(endedTrack.title)} position=${playbackPosition(this).toFixed(1)}s duration=${endedTrack.duration}s`);
     this.rememberPlayed(endedTrack);
+    this.restartRecovery = null;
     this.lastNaturalEndAt = this.loop === "track" ? null : Date.now();
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
@@ -688,6 +748,8 @@ class GuildMusic {
   }
 
   stop() {
+    this.restartTransaction = null;
+    this.restartRecovery = null;
     this.lastNaturalEndAt = null;
     this.suggestions?.clearActive();
     this.voiceGeneration = (this.voiceGeneration || 0) + 1;
@@ -957,25 +1019,25 @@ const handleCommand = async interaction => {
     if (interaction.commandName === "bassboost") {
       await interaction.deferReply();
       const enabled = !state.audioFilters.bassboost;
-      await state.setAudioFilter("bassboost", enabled);
+      await state.setAudioFilter("bassboost", enabled, content => interaction.followUp({ content, ephemeral: true }));
       return interaction.editReply(`Bass boost is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "eightd") {
       await interaction.deferReply();
       const enabled = !state.audioFilters.eightd;
-      await state.setAudioFilter("eightd", enabled);
+      await state.setAudioFilter("eightd", enabled, content => interaction.followUp({ content, ephemeral: true }));
       return interaction.editReply(`8D audio is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "nightcore") {
       await interaction.deferReply();
       const enabled = !state.audioFilters.nightcore;
-      await state.setAudioFilter("nightcore", enabled);
+      await state.setAudioFilter("nightcore", enabled, content => interaction.followUp({ content, ephemeral: true }));
       return interaction.editReply(`Nightcore is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "echo") {
       await interaction.deferReply();
       const enabled = !state.audioFilters.echo;
-      await state.setAudioFilter("echo", enabled);
+      await state.setAudioFilter("echo", enabled, content => interaction.followUp({ content, ephemeral: true }));
       return interaction.editReply(`Echo is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "play") {

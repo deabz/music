@@ -21,11 +21,13 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
   } else child.kill();
 }
 function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, probe = demuxProbe) {
-  const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES });
+  const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES,
+    transform(chunk, encoding, callback) { job.resolveAudioReady?.(); callback(null, chunk); } });
   const job = { stream, stderr: "", filterStderr: "", cancelled: false, intentionallyAborted: false, error: null, downloadDone: false, outputDone: false,
     inputType: null, formatReady: false, rate: filters.nightcore ? 1.323 : 1, children: [],
     filters: { ...filters }, offset, exits: {}, commands: [], diagnosticSecrets: [] };
   job.ready = new Promise(resolve => { job.resolveReady = resolve; });
+  job.audioReady = new Promise(resolve => { job.resolveAudioReady = resolve; });
   job.sourceStreams = new Set();
   const fail = (error, stage = "player") => {
     if (job.cancelled || job.error) return;
@@ -39,6 +41,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     }
     job.error = error;
     job.resolveReady();
+    job.resolveAudioReady();
     job.onFailure?.(error);
     if (!stream.destroyed) stream.destroy(error);
     job.cancel("failure");
@@ -59,6 +62,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     for (const source of job.sourceStreams) source.destroy();
     stream.destroy();
     job.resolveReady();
+    job.resolveAudioReady();
   };
   const finish = () => {
     if (job.sourceEnded && job.children.every(child => child.pipelineClosed) && !job.error && !job.cancelled) stream.end();

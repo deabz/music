@@ -92,7 +92,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
           await interaction.followUp({ content: `Added ${selected.title.slice(0, 100)}.`, ephemeral: true, allowedMentions: { parse: [] } });
         } catch (error) { state.suggestions.restore(selected); throw error; }
       } else if (action === "effects-apply") {
-        await state.setAudioFilters(interaction.values);
+        await state.setAudioFilters(interaction.values, content => interaction.followUp({ content, ephemeral: true }));
         await interaction.editReply({ content: "Audio effects updated.", components: [] });
       } else if (action === "play") {
         if (!await state.resumePlayback("panel")) await interaction.followUp({ content: "Playback is not paused.", ephemeral: true });

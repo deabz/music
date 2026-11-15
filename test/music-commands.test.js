@@ -189,6 +189,22 @@ test("actual startup restoration suppresses fades and panel repost; empty queue 
   }
 });
 
+test("failed effect startup restores filters and saved paused position without consuming queue or song retries", async () => {
+  const f = transitionFixture(); const queue = f.state.queue;
+  f.state.player.state.status = AudioPlayerStatus.Paused;
+  f.state.resource.playbackDuration = 20000;
+  f.state.shortStreamFailures = 1;
+  let attempts = 0; const positions = [];
+  f.state.playNext = async (_, track, options) => {
+    assert.equal(options.recoverable, true); positions.push(track.resumeAtSeconds); f.state.current = track;
+    if (++attempts === 1) throw new Error("Synthetic FFmpeg failure");
+  };
+  await assert.rejects(f.state.setAudioFilters(["bassboost"]), /could not be applied/);
+  assert.deepEqual(positions, [20, 20]); assert.equal(f.state.audioFilters.bassboost, undefined);
+  assert.equal(f.state.pauseOnRestore, true); assert.equal(f.state.queue, queue);
+  assert.equal(f.state.shortStreamFailures, 1); assert.equal(f.state.restartTransaction, null);
+});
+
 test("clean early EOF advances without waiting for metadata; short-stream detection uses real audio", async () => {
   const f = transitionFixture(); f.state.resource.playbackDuration = 10000;
   f.state.activePipeline = { sourceEnded: true, outputDone: true, children: [{ pipelineClosed: true }], cancel() {} };
@@ -893,7 +909,10 @@ test("setting all effects restarts exactly once at the same paused position and 
     resource: { playbackDuration: 5000 }, player: { state: { status: AudioPlayerStatus.Paused } },
     audioFilters: { bassboost: false, eightd: false, nightcore: false, echo: true },
     prefetch: { job: { cancel() { cancels++; } } },
-    playNext: async (_, track) => { starts++; assert.equal(track.resumeAtSeconds, 15); } });
+    playNext: async (_, track) => {
+      starts++; assert.equal(track.resumeAtSeconds, 15); state.current = track;
+      state.resumeOffsetSeconds = 15; state.resource = { playbackDuration: 0 };
+    } });
   await state.setAudioFilters(["bassboost", "nightcore"]);
   assert.equal(starts, 1); assert.equal(cancels, 1); assert.equal(state.pauseOnRestore, true);
   assert.equal(state.audioFilters.echo, false); assert.equal(state.audioFilters.nightcore, true);
