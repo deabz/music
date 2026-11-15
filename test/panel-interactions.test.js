@@ -14,7 +14,7 @@ function fixture(action, channelId = "voice", permissions = 0n) {
     adjustVolume: amount => calls.push(amount), seek: async position => calls.push(position),
     shuffle: () => calls.push("shuffle"), stop: () => calls.push("stop") };
   const interaction = { customId: "panel:" + action, guild: { id: "guild" }, message: { id: "message" },
-    isButton: () => true, member: { voice: { channelId } }, memberPermissions: new PermissionsBitField(permissions),
+    user: { id: "listener" }, isButton: () => true, member: { voice: { channelId } }, memberPermissions: new PermissionsBitField(permissions),
     reply: async value => calls.push(value), deferUpdate: async () => calls.push("defer"), followUp: async value => calls.push(value) };
   return { state, interaction, calls, handler: createPanelInteractionHandler({ getMusic: () => state, log() {} }) };
 }
@@ -30,11 +30,14 @@ test("ordinary actions defer first, call existing methods, and schedule panel up
 });
 test("all panel controls require voice access, with Manage Server/Admin overrides", async () => {
   for (const action of Object.keys(ACTION_PERMISSIONS)) {
-    const f = fixture(action, "elsewhere"); await f.handler(f.interaction);
+    const f = fixture(action, "elsewhere");
+    if (action === "effects-apply") f.interaction.customId += ":listener"; await f.handler(f.interaction);
     assert.equal(f.calls.length, 1, action); assert.equal(f.calls[0].ephemeral, true);
     assert.match(f.calls[0].content, /voice channel/);
     for (const role of [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.Administrator]) {
-      const manager = fixture(action, "elsewhere", role); await manager.handler(manager.interaction);
+      const manager = fixture(action, "elsewhere", role);
+      if (action === "effects-apply") { manager.interaction.customId += ":listener"; manager.state.setAudioFilters = async () => {}; manager.interaction.editReply = async () => {}; }
+      await manager.handler(manager.interaction);
       assert.ok(!manager.calls.some(item => item.content?.includes("Join the bot's voice channel")));
     }
   }
@@ -47,4 +50,24 @@ test("lyrics are private, stale panels are rejected, and errors never expose lib
   const failed = fixture("next"); failed.state.skip = async () => { throw new Error("PRIVATE_PATH"); };
   await failed.handler(failed.interaction);
   assert.equal(failed.calls[0], "defer"); assert.ok(!JSON.stringify(failed.calls).includes("PRIVATE_PATH"));
+});
+
+
+test("effects menu preselects enabled filters and submits one exact set including empty", async () => {
+  const f = fixture("effects"); f.state.audioFilters = { echo: true };
+  await f.handler(f.interaction);
+  const menu = f.calls[0].components[0].components[0];
+  assert.equal(f.calls[0].ephemeral, true);
+  assert.equal(menu.min_values, 0); assert.equal(menu.max_values, 4);
+  assert.equal(menu.options.find(option => option.value === "echo").default, true);
+  const applied = [];
+  f.state.setAudioFilters = async values => applied.push(values);
+  f.interaction.customId = "panel:effects-apply:listener";
+  f.interaction.message.id = "ephemeral";
+  f.interaction.editReply = async () => {};
+  f.interaction.values = ["bassboost", "nightcore"];
+  await f.handler(f.interaction);
+  f.interaction.values = [];
+  await f.handler(f.interaction);
+  assert.deepEqual(applied, [["bassboost", "nightcore"], []]);
 });

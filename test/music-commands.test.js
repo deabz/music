@@ -635,3 +635,20 @@ test("previous restarts after five seconds or without history; otherwise restore
   assert.equal(state.current.title, "old"); assert.equal(state.queue[0].title, "now");
   assert.equal(state.history.length, 0); assert.equal(state.pauseOnRestore, true);
 });
+
+
+test("setting all effects restarts exactly once at the same paused position and cancels prefetch", async () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.create(GuildMusic.prototype);
+  let starts = 0, cancels = 0;
+  Object.assign(state, { current: { title: "Song", duration: 100 }, playing: true, resumeOffsetSeconds: 10,
+    resource: { playbackDuration: 5000 }, player: { state: { status: AudioPlayerStatus.Paused } },
+    audioFilters: { bassboost: false, eightd: false, nightcore: false, echo: true },
+    prefetch: { job: { cancel() { cancels++; } } },
+    playNext: async (_, track) => { starts++; assert.equal(track.resumeAtSeconds, 15); } });
+  await state.setAudioFilters(["bassboost", "nightcore"]);
+  assert.equal(starts, 1); assert.equal(cancels, 1); assert.equal(state.pauseOnRestore, true);
+  assert.equal(state.audioFilters.echo, false); assert.equal(state.audioFilters.nightcore, true);
+  await state.setAudioFilters(["bassboost", "nightcore"]); assert.equal(starts, 1);
+  await state.setAudioFilters([]); assert.equal(starts, 2);
+});

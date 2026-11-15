@@ -182,20 +182,23 @@ class GuildMusic {
   }
 
   setAudioFilter(filter, enabled) {
-    this.invalidateNext();
-    this.audioFilters[filter] = enabled;
-    if (this.playing && this.current) {
-      // Capture current position before restarting
-      const currentPos = playbackPosition(this);
-      const wasPaused = this.player.state.status === AudioPlayerStatus.Paused;
-      this.resumeOffsetSeconds = currentPos;
-      this.pauseOnRestore = wasPaused;
+    const selected = new Set(Object.keys(this.audioFilters).filter(name => this.audioFilters[name]));
+    if (enabled) selected.add(filter); else selected.delete(filter);
+    return this.setAudioFilters([...selected]);
+  }
 
-      // Restart track to apply filter
-      this.playNext(null, {
-        ...this.current,
-        resumeAtSeconds: currentPos
-      });
+  async setAudioFilters(selected) {
+    const names = ["bassboost", "eightd", "nightcore", "echo"];
+    if (!Array.isArray(selected) || selected.some(name => !names.includes(name))) throw new Error("Invalid effects selection.");
+    const filters = Object.fromEntries(names.map(name => [name, selected.includes(name)]));
+    if (names.every(name => Boolean(this.audioFilters[name]) === filters[name])) return;
+    const position = playbackPosition(this);
+    const wasPaused = this.player.state.status === AudioPlayerStatus.Paused;
+    this.invalidateNext();
+    this.audioFilters = filters;
+    if (this.playing && this.current) {
+      this.pauseOnRestore = wasPaused;
+      await this.playNext(null, { ...this.current, resumeAtSeconds: position });
     }
     scheduleMusicSave();
   }
@@ -874,22 +877,22 @@ const handleCommand = async interaction => {
   try {
     if (interaction.commandName === "bassboost") {
       const enabled = !state.audioFilters.bassboost;
-      state.setAudioFilter("bassboost", enabled);
+      await state.setAudioFilter("bassboost", enabled);
       return reply(interaction, `Bass boost is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "eightd") {
       const enabled = !state.audioFilters.eightd;
-      state.setAudioFilter("eightd", enabled);
+      await state.setAudioFilter("eightd", enabled);
       return reply(interaction, `8D audio is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "nightcore") {
       const enabled = !state.audioFilters.nightcore;
-      state.setAudioFilter("nightcore", enabled);
+      await state.setAudioFilter("nightcore", enabled);
       return reply(interaction, `Nightcore is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "echo") {
       const enabled = !state.audioFilters.echo;
-      state.setAudioFilter("echo", enabled);
+      await state.setAudioFilter("echo", enabled);
       return reply(interaction, `Echo is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "play") {

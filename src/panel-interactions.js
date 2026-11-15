@@ -1,12 +1,12 @@
 const { musicAccessError } = require("./music-permissions");
 const { playbackPosition } = require("./playback-position");
 const { buildGeniusSearchUrl } = require("./music-utils");
-const { PANEL_PREFIX } = require("./player-panel");
+const { PANEL_PREFIX, buildEffectsMenu } = require("./player-panel");
 
 const ACTION_PERMISSIONS = {
   play: "resume", previous: "forward", pause: "pause", next: "skip", loop: "loop",
   "vol-down": "voldown", rewind: "forward", favourite: "volume", forward: "forward", "vol-up": "volup",
-  lyrics: "forward", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "volume", suggest: "volume"
+  "effects-apply": "echo", lyrics: "forward", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "volume", suggest: "volume"
 };
 const privateReply = (interaction, content) => interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
 function createPanelInteractionHandler({ getMusic, isReady = () => true, log = console.error } = {}) {
@@ -16,17 +16,26 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, log = c
       await privateReply(interaction, "The player is unavailable while the bot initializes or shuts down.");
       return true;
     }
-    const action = interaction.customId.slice(PANEL_PREFIX.length);
+    const [action, ownerId] = interaction.customId.slice(PANEL_PREFIX.length).split(":");
+    const temporary = action === "effects-apply";
+    if (temporary && ownerId !== interaction.user.id) {
+      await privateReply(interaction, "This menu belongs to another listener."); return true;
+    }
     const permission = ACTION_PERMISSIONS[action];
     if (!permission) { await privateReply(interaction, "This player control is unavailable."); return true; }
     const state = getMusic(interaction.guild);
     const denied = musicAccessError(interaction, state, permission);
     if (denied) { await privateReply(interaction, denied); return true; }
-    if (state.panelMessageId && interaction.message?.id !== state.panelMessageId) {
+    if (!temporary && state.panelMessageId && interaction.message?.id !== state.panelMessageId) {
       await privateReply(interaction, "This is an old panel. Use /nowplaying to bring back the current player.");
       return true;
     }
     state.panel?.wake();
+    if (action === "effects") {
+      await interaction.reply({ content: "Choose exactly the effects you want enabled.", ephemeral: true,
+        components: buildEffectsMenu(state, interaction.user.id) });
+      return true;
+    }
     if (action === "lyrics") {
       await privateReply(interaction, state.current
         ? buildGeniusSearchUrl(state.current.title, state.current.author) : "Nothing is playing.");
@@ -34,7 +43,10 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, log = c
     }
     await interaction.deferUpdate();
     try {
-      if (action === "play") {
+      if (action === "effects-apply") {
+        await state.setAudioFilters(interaction.values);
+        await interaction.editReply({ content: "Audio effects updated.", components: [] });
+      } else if (action === "play") {
         if (!await state.resumePlayback("panel")) await interaction.followUp({ content: "Playback is not paused.", ephemeral: true });
       } else if (action === "pause") {
         if (!await state.pausePlayback("panel")) await interaction.followUp({ content: "Nothing is playing.", ephemeral: true });

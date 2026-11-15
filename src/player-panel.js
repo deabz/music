@@ -162,4 +162,10 @@ function createPlayerPanel(state, onIdentity) {
   return new PlayerPanel(state, { getChannel: id => state.guild.channels.fetch(id),
     avatarUrl: () => state.guild.client.user?.displayAvatarURL(), onIdentity });
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, PANEL_PREFIX, short };
+function buildEffectsMenu(state, userId) {
+  return [{ type: 1, components: [{ type: 3, custom_id: `panel:effects-apply:${userId}`,
+    placeholder: "Choose audio effects", min_values: 0, max_values: 4,
+    options: [["bassboost", "Bass boost"], ["eightd", "8D"], ["nightcore", "Nightcore"], ["echo", "Echo"]]
+      .map(([value, label]) => ({ label, value, default: Boolean(state.audioFilters?.[value]) })) }] }];
+}
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, PANEL_PREFIX, short };
