@@ -67,6 +67,14 @@ function guildMusicClass(overrides = {}) {
   });
 }
 
+test("actual playNext safely ends an empty queue with null prefetch", async () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.assign(Object.create(GuildMusic.prototype), { queue: [], current: null, prefetch: null,
+    activePipeline: null, playing: true });
+  await state.playNext();
+  assert.equal(state.current, null); assert.equal(state.playing, false); assert.equal(state.resource, null);
+});
+
 test("known downloader failure stops without repeat/autoplay and preserves queue", async () => {
   const notices = [];
   const GuildMusic = guildMusicClass();

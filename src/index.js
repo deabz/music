@@ -458,7 +458,8 @@ class GuildMusic {
     if (shuttingDown || (this.current && this.playing && !trackToPlay)) return;
     clearTimeout(this.emptyTimer);
     const next = trackToPlay || this.queue.shift();
-    const prepared = !trackToPlay && this.prefetch?.track === next ? this.prefetch.job : null;
+    const prefetch = this.prefetch;
+    const prepared = next && !trackToPlay && prefetch?.track === next ? prefetch?.job : null;
     if (prepared) this.prefetch = null;
     if (next) this.invalidateNext();
     this.cancelActive();
@@ -616,7 +617,14 @@ class GuildMusic {
     return true;
   }
 
-  async skip() {
+  skip() {
+    // Share an in-flight skip across slash, dashboard and panel callers.
+    if (this.skipPromise) return this.skipPromise;
+    this.skipPromise = this.skipCurrent().finally(() => { this.skipPromise = null; });
+    return this.skipPromise;
+  }
+
+  async skipCurrent() {
     const skipped = this.current;
     if (!skipped) return false;
     this.rememberPlayed(skipped);
@@ -625,8 +633,11 @@ class GuildMusic {
     this.cancelActive();
     this.player.stop(true);
     if (this.loop === "queue") this.queue.push(skipped);
-    await this.playNext();
-    if (!this.current) this.prepareNext(true, skipped);
+    const started = this.playNext();
+    const generation = this.nextGeneration;
+    await started;
+    // Stop/leave/queue edits during startup must not resurrect autoplay.
+    if (!this.current && generation === this.nextGeneration) this.prepareNext(true, skipped);
     return true;
   }
 
