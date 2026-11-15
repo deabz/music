@@ -93,7 +93,9 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
         } catch (error) { state.suggestions.restore(selected); throw error; }
       } else if (action === "effects-apply") {
         await state.setAudioFilters(interaction.values, content => interaction.followUp({ content, ephemeral: true }));
-        await interaction.editReply({ content: "Audio effects updated.", components: [] });
+        const labels = { bassboost: "Bass boost", eightd: "8D", nightcore: "Nightcore", echo: "Echo" };
+        const enabled = Object.entries(state.audioFilters || {}).filter(([, value]) => value).map(([name]) => labels[name]);
+        await interaction.editReply({ content: `Audio effects updated. Enabled: ${enabled.join(", ") || "none"}.`, components: [] });
       } else if (action === "play") {
         if (!await state.resumePlayback("panel")) await interaction.followUp({ content: "Playback is not paused.", ephemeral: true });
       } else if (action === "pause") {
@@ -115,7 +117,10 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
       state.panel?.scheduleUpdate();
     } catch (error) {
       log(`[panel:${interaction.guild.id}:${action}] ${error?.stack || error?.message || String(error)}`);
-      await interaction.followUp({ content: "Could not use that control. Try again or check the bot's permissions.", ephemeral: true, allowedMentions: { parse: [] } }).catch(() => {});
+      const content = action === "effects-apply"
+        ? "Audio effects could not be applied. Previous settings were restored if playback could be recovered."
+        : "Could not use that control. Try again or check the bot's permissions.";
+      await interaction.followUp({ content, ephemeral: true, allowedMentions: { parse: [] } }).catch(() => {});
     }
     return true;
     } finally {

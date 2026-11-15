@@ -28,6 +28,24 @@ test("ordinary actions defer first, call existing methods, and schedule panel up
   const f = fixture("loop");
   for (const mode of ["track", "queue", "off"]) { await f.handler(f.interaction); assert.equal(f.state.loop, mode); }
 });
+
+test("effects multi-select acknowledges before exactly one set replacement and rejects a second submission", async () => {
+  const f = fixture("effects-apply"); f.interaction.customId += ":listener";
+  f.interaction.values = ["bassboost", "echo"];
+  let release, starts = 0;
+  f.state.setAudioFilters = async values => {
+    assert.equal(f.calls[0], "defer"); assert.deepEqual(values, ["bassboost", "echo"]); starts++;
+    await new Promise(resolve => { release = resolve; });
+    f.state.audioFilters = { bassboost: true, echo: true, nightcore: false, eightd: false };
+  };
+  f.interaction.editReply = async payload => f.calls.push(payload);
+  const first = f.handler(f.interaction); await new Promise(setImmediate);
+  await f.handler(f.interaction); assert.equal(starts, 1); assert.match(f.calls.at(-1).content, /Please wait/);
+  release(); await first;
+  const result = f.calls.find(value => value.content?.includes("Audio effects updated"));
+  assert.match(result.content, /Bass boost, Echo/); assert.deepEqual(result.components, []);
+  assert.equal(f.state.interactionRestarting, false);
+});
 test("playback panel controls require voice access even for Manage Server/Admin", async () => {
   for (const action of Object.keys(ACTION_PERMISSIONS).filter(action => !["lyrics", "favourite", "favourites"].includes(action))) {
     const f = fixture(action, "elsewhere");
