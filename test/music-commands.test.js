@@ -364,6 +364,35 @@ test("search menu uses bounded values and reports selection failures ephemerally
   assert.equal(failure.ephemeral, true);
 });
 
+test("slash playback commands refuse out-of-channel admins before calling music methods", async () => {
+  const { musicAccessError } = require('../src/music-permissions');
+  const { PermissionsBitField, PermissionFlagsBits } = require('discord.js');
+  for (const commandName of ['pause', 'resume', 'skip', 'stop', 'leave', 'clear', 'remove', 'move', 'shuffle', 'loop', 'volume', 'volup', 'voldown', 'forward', 'bassboost', 'eightd', 'nightcore', 'echo']) {
+    const state = { connection: { state: { status: 'ready' }, joinConfig: { channelId: 'voice' } } };
+    let response;
+    await commandHandler(state, { musicAccessError })({ commandName, user: { id: 'admin' },
+      guild: { ownerId: 'admin', voiceStates: { cache: new Map() } }, memberPermissions: new PermissionsBitField(PermissionFlagsBits.Administrator),
+      reply: async payload => { response = payload; } });
+    assert.equal(response.ephemeral, true, commandName); assert.match(response.content, /Join <#voice>/);
+  }
+});
+
+test("search selection rechecks live voice state and rejects an outside manager", async () => {
+  const { musicAccessError, resolveMemberVoiceChannel } = require('../src/music-permissions');
+  const { PermissionsBitField, PermissionFlagsBits } = require('discord.js');
+  let collect, added = 0, response;
+  const guild = { voiceStates: { cache: new Map([['user', { channelId: 'voice' }]]) }, channels: { fetch: async id => ({ id }) } };
+  const state = { playing: true, current: {}, connection: { state: { status: 'ready' }, joinConfig: { channelId: 'voice' } }, add: async () => { added++; } };
+  const handler = commandHandler(state, { musicAccessError, resolveMemberVoiceChannel,
+    searchYouTube: async () => [{ title: 'Song', url: 'url', durationInSec: 100 }] });
+  await handler({ guild, user: { id: 'user' }, commandName: 'search', options: { getString: () => 'Song' }, deferReply: async () => {},
+    editReply: async () => ({ createMessageComponentCollector: () => ({ on: (event, callback) => { if (event === 'collect') collect = callback; } }) }) });
+  guild.voiceStates.cache.set('user', { channelId: 'elsewhere' });
+  await collect({ guild, user: { id: 'user' }, values: ['0'], memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild),
+    member: { voice: { channel: { id: 'voice' } } }, reply: async payload => { response = payload; } });
+  assert.equal(added, 0); assert.equal(response.ephemeral, true); assert.match(response.content, /Join <#voice>/);
+});
+
 test("every registered slash command dispatches and responds with valid arguments", async () => {
   const builders = require("../src/commands");
   const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");

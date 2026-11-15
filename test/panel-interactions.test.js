@@ -83,6 +83,50 @@ test("Next on an idle panel acknowledges without starting or throwing", async ()
   assert.equal(f.calls[0], "defer"); assert.equal(skips, 1); assert.equal(f.calls.at(-1), "update");
 });
 
+test("all playback actions refuse outside admins and owners ephemerally", async () => {
+  for (const [action, permission] of Object.entries(ACTION_PERMISSIONS)) {
+    if (permission === "read-only") continue;
+    for (const role of [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.Administrator]) {
+      const f = fixture(action, null, role); f.interaction.guild.ownerId = "listener";
+      if (["effects-apply", "favourites-select"].includes(action)) f.interaction.customId += ":listener";
+      await f.handler(f.interaction);
+      assert.equal(f.calls.length, 1); assert.equal(f.calls[0].ephemeral, true); assert.match(f.calls[0].content, /Join <#voice>/);
+    }
+  }
+});
+
+test("effects menu rechecks current voice state on submit and after acknowledgement", async () => {
+  const f = fixture("effects"); await f.handler(f.interaction);
+  f.interaction.guild.voiceStates.cache.delete("listener");
+  f.interaction.customId = "panel:effects-apply:listener"; f.interaction.values = ["echo"];
+  let applied = 0; f.state.setAudioFilters = async () => { applied++; };
+  await f.handler(f.interaction); assert.equal(applied, 0); assert.equal(f.calls.at(-1).ephemeral, true);
+  f.interaction.guild.voiceStates.cache.set("listener", { channelId: "voice" });
+  f.interaction.deferUpdate = async () => { f.interaction.guild.voiceStates.cache.delete("listener"); };
+  await f.handler(f.interaction); assert.equal(applied, 0); assert.match(f.calls.at(-1).content, /Join <#voice>/);
+});
+
+test("heart and favourites browsing are open outside voice, but favourites queueing is refused", async () => {
+  const f = fixture("favourite", null); let toggles = 0;
+  const favourites = { toggle: async () => { toggles++; return "added"; }, list: () => [{ id: "saved", title: "Saved", url: "url", duration: 100 }] };
+  const handler = createPanelInteractionHandler({ getMusic: () => f.state, favourites });
+  await handler(f.interaction); assert.equal(toggles, 1);
+  f.interaction.customId = "panel:favourites"; await handler(f.interaction);
+  assert.match(f.calls.at(-2).content, /Choose/);
+  f.interaction.customId = "panel:favourites-select:listener"; f.interaction.values = ["saved"];
+  f.state.add = () => assert.fail("Outside listener must not queue a favourite");
+  await handler(f.interaction); assert.match(f.calls.at(-1).content, /Join <#voice>/); assert.equal(f.calls.at(-1).ephemeral, true);
+});
+
+test("suggestion selection refuses if the listener leaves while channel fetch is pending", async () => {
+  const f = fixture("suggest"); let restored = 0;
+  f.interaction.values = ["song"];
+  f.state.suggestions = { take: () => ({ id: "song", title: "Song" }), restore: () => { restored++; } };
+  f.interaction.guild.channels = { fetch: async () => { f.interaction.guild.voiceStates.cache.delete("listener"); return { id: "voice" }; } };
+  f.state.add = () => assert.fail("Listener left before adding");
+  await f.handler(f.interaction); assert.equal(restored, 1); assert.equal(f.calls.at(-1).ephemeral, true);
+});
+
 
 test("effects menu preselects enabled filters and submits one exact set including empty", async () => {
   const f = fixture("effects"); f.state.audioFilters = { echo: true };
