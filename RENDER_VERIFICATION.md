@@ -440,13 +440,13 @@ as image metadata only, and the test suite asserts the Dockerfile does not set
 `PORT`. The earlier hosted Linux/Docker evidence above concerns the prior
 verified commit and is not claimed as a build of this startup change.
 
-Release gates for this follow-up: the local working tree still requires a
-commit before it can be considered clean. The configured `origin` is
-`https://github.com/deabz/music.git`; repository visibility must be checked with
-`gh` before any publication. Live Render and Discord checks remain pending.
+The startup and Docker corrections are committed locally on `render-startup-fix`
+as `1c2c91c` and `a101907`. The configured `origin` is
+`https://github.com/deabz/music.git`. Live Render and Discord checks remain
+pending.
 
 After the follow-up tests, `npm run scan:secrets` passed over the working tree
-and 131 commits (zero unreviewed findings; protected paths absent). `gh repo
+and all scanned commits (zero unreviewed findings; protected paths absent). `gh repo
 view deabz/music --json visibility` returned `PUBLIC`, so the publication gate
 fails and no merge or push is permitted. Docker CLI is unavailable and `wsl
 --list --quiet` returned access denied, so this follow-up has no fresh Linux or
