@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const storage = require("./storage");
-const { classifyStreamFailure } = require("./playback-errors");
+const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
@@ -449,6 +449,14 @@ class GuildMusic {
     try {
       const job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
       this.activePipeline = job;
+      job.shouldIgnoreFailure = error => {
+        const expected = isExpectedPipeFailure(error.stderr || error.message, {
+          intentionallyAborted: job.intentionallyAborted, naturalAudioEnd: job.naturalAudioEnd,
+          positionSeconds: playbackPosition(this), durationSeconds: next.duration
+        });
+        if (expected && !job.ignoredPipe) console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Natural end pipe closure track=${JSON.stringify(next.title)}`);
+        return expected;
+      };
       job.onFailure = error => {
         if (this.activePipeline === job && !job.cancelled) this.failPlayback(next, error);
       };
@@ -518,9 +526,14 @@ class GuildMusic {
     const endedTrack = this.current;
     if (!endedTrack) return;
     const job = this.activePipeline;
-    if (job?.cancelled) return;
+    if (job?.intentionallyAborted) return;
     if (this.isShortStream()) return this.retryShortStream(endedTrack, job?.error || new Error("Audio ended within three seconds."));
     if (job?.error) return this.failPlayback(endedTrack, job.error);
+    const position = playbackPosition(this);
+    if (Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
+      return this.failPlayback(endedTrack, new Error(`Audio ended early at ${position.toFixed(1)}s of ${endedTrack.duration}s.`));
+    }
+    if (job) job.naturalAudioEnd = true;
     this.shortStreamFailures = 0;
     delete endedTrack.streamRetry;
     // Pipeline EOF already requires successful child exit; do not await anything here.

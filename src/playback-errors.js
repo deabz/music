@@ -8,4 +8,14 @@ function classifyStreamFailure(detail = "") {
   if (/timed?\s*out|timeout|network|connection (?:reset|refused|aborted)|ENOTFOUND|ECONNRESET|ETIMEDOUT|unable to (?:connect|download webpage)|name resolution/i.test(text)) return { code: "network", message: "A network error or timeout interrupted the download" };
   return { code: "unknown", message: "Playback failed; check the host logs for details" };
 }
-module.exports = { classifyStreamFailure };
+const NATURAL_END_TOLERANCE_SECONDS = 5;
+function isPipeFailure(detail = "") {
+  return /\bEPIPE\b|broken pipe|\[?Errno\s+(?:22|32)\]?|\bEINVAL\b/i.test(String(detail));
+}
+function isExpectedPipeFailure(detail, { intentionallyAborted = false, naturalAudioEnd = false,
+  positionSeconds = 0, durationSeconds = 0 } = {}) {
+  if (!isPipeFailure(detail)) return false;
+  return intentionallyAborted || naturalAudioEnd || (Number.isFinite(durationSeconds) && durationSeconds > 0
+    && positionSeconds >= Math.max(0, durationSeconds - NATURAL_END_TOLERANCE_SECONDS));
+}
+module.exports = { classifyStreamFailure, isPipeFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS };

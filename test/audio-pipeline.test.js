@@ -90,3 +90,17 @@ test("Windows cancellation targets the process tree, with fallback on taskkill f
   killer.emit("close", 1);
   assert.equal(kills, 1);
 });
+test("natural-end pipe noise can complete without failure; early pipe failures remain errors", async () => {
+  for (const natural of [true, false]) {
+    const fixture = launcher();
+    const job = createAudioPipeline({ url: "test" }, {}, 0, fixture.spawn);
+    assert.equal(job.intentionallyAborted, false);
+    job.shouldIgnoreFailure = () => natural;
+    fixture.calls[0].child.stderr.write("ERROR: unable to write data: [Errno 32] Broken pipe");
+    fixture.calls[0].child.emit("close", 1);
+    assert.equal(Boolean(job.error), !natural);
+    if (natural) assert.equal(job.stream.writableEnded, true);
+    else assert.equal(job.intentionallyAborted, false, "failure cleanup must not be labelled user cancellation");
+    job.cancel();
+  }
+});

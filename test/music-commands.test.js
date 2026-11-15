@@ -49,7 +49,7 @@ function guildMusicClass(overrides = {}) {
   const end = source.indexOf("\nconst client =", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     AudioPlayerStatus,
-    classifyStreamFailure: require("../src/playback-errors").classifyStreamFailure,
+    ...require("../src/playback-errors"),
     playbackPosition: require("../src/playback-position").playbackPosition,
     shuttingDown: false,
     AbortController,

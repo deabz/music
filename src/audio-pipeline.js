@@ -21,21 +21,28 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
 }
 function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
   const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES });
-  const job = { stream, stderr: "", filterStderr: "", cancelled: false, error: null, downloadDone: false, outputDone: false,
+  const job = { stream, stderr: "", filterStderr: "", cancelled: false, intentionallyAborted: false, error: null, downloadDone: false, outputDone: false,
     inputType: "webm/opus", rate: filters.nightcore ? 1.323 : 1, children: [] };
   const fail = error => {
     if (job.cancelled || job.error) return;
     error.stderr = job.stderr || error.stderr || "";
+    if (job.shouldIgnoreFailure?.(error)) {
+      job.ignoredPipe = true;
+      job.sourceEnded = true;
+      job.finish?.();
+      return;
+    }
     job.error = error;
     job.onFailure?.(error);
     if (!stream.destroyed) stream.destroy(error);
-    job.cancel();
+    job.cancel("failure");
   };
   // Keep errors handled even before a prefetched stream has a player subscriber.
   stream.on("error", fail);
   stream.on("finish", () => { job.outputDone = true; });
-  job.cancel = () => {
+  job.cancel = (reason = "intentional") => {
     if (job.cancelled) return;
+    job.intentionallyAborted = reason === "intentional";
     job.cancelled = true;
     for (const child of job.children) {
       terminateChild(child);
@@ -48,6 +55,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
   const finish = () => {
     if (job.sourceEnded && job.children.every(child => child.pipelineClosed) && !job.error && !job.cancelled) stream.end();
   };
+  job.finish = finish;
   const output = source => {
     source.on("end", () => { job.sourceEnded = true; finish(); });
     source.pipe(stream, { end: false });
