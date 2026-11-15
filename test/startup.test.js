@@ -87,3 +87,39 @@ test("gateway diagnostics expose HTTP status and retry waits without raw debug d
   assert.equal(messages.length, 6);
   assert.ok(!messages.join("\n").includes("synthetic-secret"));
 });
+
+
+test("registration failure and malformed guild snapshots do not prevent restoration or readiness", async () => {
+  const begin = source.indexOf("client.once(Events.ClientReady, async ready => {");
+  const finish = source.indexOf("\nconst handleCommand", begin);
+  let handler, release, restored = 0, joined = 0;
+  const pending = new Promise(r => { release = r; });
+  const state = { restore: async () => { restored++; await pending; }, connect: async () => { joined++; } };
+  const context = { startupComplete: false, shuttingDown: false, console: { log() {}, error() {} },
+    client: { once: (_, fn) => { handler = fn; } }, Events: { ClientReady: "ready" },
+    updatePresence() {}, registerCommands: async () => { throw new Error("synthetic registration failure"); },
+    loadMusicState: async () => {}, savedMusicStates: { bad: null, malformed: [], valid: { voiceChannelId: "voice" } },
+    getMusic: () => state, music: new Map(), VoiceConnectionStatus: { Ready: "ready" },
+    config: { autoJoin: true, voiceGuildId: "auto", voiceChannelId: "voice" } };
+  vm.createContext(context); vm.runInContext(source.slice(begin, finish), context);
+  const guild = { id: "guild", channels: { fetch: async () => ({ isVoiceBased: () => true }) } };
+  const running = handler({ user: { tag: "synthetic" }, guilds: { fetch: async () => guild } });
+  await new Promise(setImmediate);
+  assert.equal(context.startupComplete, false);
+  assert.equal(restored, 1);
+  release(); await running;
+  assert.equal(joined, 1); assert.equal(context.startupComplete, true);
+});
+
+test("fatal process handlers log and request shutdown with a failure exit code", () => {
+  const handlers = new Map(), exits = [];
+  const begin = source.indexOf('process.on("SIGINT"');
+  const finish = source.indexOf('\nclient.on(Events.Error', begin);
+  vm.runInNewContext(source.slice(begin, finish), {
+    process: { on: (event, handler) => handlers.set(event, handler) }, console: { error() {} },
+    shutdown: async code => { exits.push(code); }
+  });
+  handlers.get("unhandledRejection")(new Error("synthetic"));
+  handlers.get("uncaughtException")(new Error("synthetic"));
+  assert.deepEqual(exits, [1, 1]);
+});

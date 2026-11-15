@@ -5,7 +5,6 @@ const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
 const { musicAccessError } = require("./music-permissions");
 const { createSpotifyClient, matchSpotifyTracks } = require("./spotify");
-const ytdlp = require("youtube-dl-exec");
 const {
   buildHelpEmbed,
   buildNowPlayingEmbed,
@@ -21,7 +20,7 @@ const {
 const { createHealthServer } = require("./health-server");
 const { healthPage } = require("./health-page");
 const { dashboardPage } = require("./dashboard-page");
-const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies } = require("./music-utils");
+const { MAX_TRACK_DURATION_SECONDS, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, prepareYouTubeCookies } = require("./music-utils");
 const {
   ActivityType,
   ChannelType,
@@ -38,7 +37,6 @@ const {
 const {
   AudioPlayerStatus,
   NoSubscriberBehavior,
-  StreamType,
   VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
@@ -75,6 +73,9 @@ const config = {
 const { playbackPosition } = require("./playback-position");
 const { createMentionHandler } = require("./mentions");
 const startedAt = Date.now();
+let startupComplete = false;
+let shuttingDown = false;
+let shutdownPromise = null;
 let musicSaveTimer = null;
 let musicSaveChain = Promise.resolve();
 let savedMusicStates = {};
@@ -90,7 +91,8 @@ function musicSnapshot(state) {
     paused: state.player.state.status === AudioPlayerStatus.Paused || state.pauseOnRestore,
     queue: state.queue,
     loop: state.loop,
-    volume: state.volume
+    volume: state.volume,
+    notificationChannelId: state.notificationChannelId
   };
 }
 
@@ -104,7 +106,7 @@ async function writeMusicState() {
 }
 
 function scheduleMusicSave() {
-  if (!musicStateLoaded) return;
+  if (shuttingDown || !musicStateLoaded) return;
   clearTimeout(musicSaveTimer);
   musicSaveTimer = setTimeout(() => {
     musicSaveChain = musicSaveChain
@@ -135,13 +137,11 @@ class GuildMusic {
     this.pauseOnRestore = false;
     this.savedVoiceChannelId = null;
     this.autoplayTriedUrls = new Set();
-    this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
+    this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     this.connection = null;
-    this.streamProcess = null;
     this.activePipeline = null;
     this.prefetch = null;
     this.nextGeneration = 0;
-    this.filterProcess = null;
     this.emptyTimer = null;
     this.pausedForEmpty = false;
     this.notificationChannelId = null;
@@ -194,6 +194,7 @@ class GuildMusic {
   async connect(channel) {
     if (!channel || !channel.isVoiceBased()) throw new Error("Join a voice channel first.");
     while (this.connectPromise) await this.connectPromise.catch(() => {});
+    if (shuttingDown) throw new Error("Bot is shutting down.");
     if (this.connection?.state.status === VoiceConnectionStatus.Ready
       && this.connection.joinConfig.channelId === channel.id) return this.connection;
     const generation = this.voiceGeneration || 0;
@@ -215,7 +216,7 @@ class GuildMusic {
     connection.on("error", error => console.error(`[voice:${this.guild.id}] ${error.stack || error.message}`));
     connection.on("stateChange", (before, next) => {
       console.log(`[voice:${this.guild.id}] ${before.status} -> ${next.status}`);
-      if (this.connection !== connection || this.connectPromise) return;
+      if (shuttingDown || this.connection !== connection || this.connectPromise) return;
       if (next.status === VoiceConnectionStatus.Disconnected || next.status === VoiceConnectionStatus.Destroyed) {
         this.recoverVoice(connection).catch(error => console.error(`[voice:${this.guild.id}] Recovery failed: ${error.message}`));
       }
@@ -233,7 +234,7 @@ class GuildMusic {
   }
 
   async recoverVoice(connection) {
-    if (this.recoveryPromise || this.connection !== connection) return;
+    if (shuttingDown || this.recoveryPromise || this.connection !== connection) return;
     const generation = this.voiceGeneration || 0;
     const valid = () => generation === (this.voiceGeneration || 0);
     const task = (async () => {
@@ -291,7 +292,7 @@ class GuildMusic {
     if (this.queue.length + items.length > config.maxQueueSize) throw new Error("The queue is full.");
     this.queue.push(...items.map(track => ({ ...track, requestedById: requesterId })));
     this.autoplayTriedUrls.clear();
-    this.notificationChannelId = notificationChannel?.id || null;
+    if (!this.notificationChannelId) this.notificationChannelId = notificationChannel?.id || null;
     if (this.playing) this.prepareNext();
     scheduleMusicSave();
     if (!this.playing) {
@@ -344,6 +345,8 @@ class GuildMusic {
   }
 
   async restoreState(snapshot, channel) {
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid saved snapshot.");
+    this.notificationChannelId = typeof snapshot.notificationChannelId === "string" ? snapshot.notificationChannelId : null;
     this.loop = ["off", "track", "queue"].includes(snapshot.loop) ? snapshot.loop : "off";
     this.volume = Number.isFinite(snapshot.volume) ? Math.max(0, Math.min(200, snapshot.volume)) : config.defaultVolume;
     this.savedVoiceChannelId = snapshot.voiceChannelId;
@@ -372,6 +375,8 @@ class GuildMusic {
     this.nextGeneration = (this.nextGeneration || 0) + 1;
     this.prefetch?.job.cancel();
     this.prefetch = null;
+    this.suggestionAbort?.abort();
+    this.suggestionAbort = null;
   }
 
   queueChanged() {
@@ -396,8 +401,10 @@ class GuildMusic {
     const generation = this.nextGeneration;
     this.suggestionGeneration = generation;
     const current = sourceTrack;
+    const controller = new AbortController();
+    this.suggestionAbort = controller;
     resolveSuggestedTrack(current, this.autoplayTriedUrls,
-      (query, options) => searchYouTube(query, options.limit), artworkFrom)
+      (query, options) => searchYouTube(query, options.limit, undefined, controller.signal), artworkFrom)
       .then(suggestion => {
         if (!suggestion || generation !== this.nextGeneration || (this.current && this.current !== current) || this.queue.length) return;
         this.autoplayTriedUrls.add(suggestion.url);
@@ -405,14 +412,14 @@ class GuildMusic {
         scheduleMusicSave();
         if (!this.current) this.playNext();
         else this.prepareNext(false);
-      }).catch(error => console.error(`[autoplay:${this.guild.id}] ${error.message}`));
+      }).catch(error => {
+        if (!controller.signal.aborted && generation === this.nextGeneration) console.error(`[autoplay:${this.guild.id}] ${error.message}`);
+      });
   }
 
   cancelActive() {
     this.activePipeline?.cancel();
     this.activePipeline = null;
-    this.streamProcess = null;
-    this.filterProcess = null;
     this.resource = null;
   }
 
@@ -440,7 +447,6 @@ class GuildMusic {
     try {
       const job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
       this.activePipeline = job;
-      this.streamProcess = job.download;
       job.onFailure = error => {
         if (this.activePipeline === job && !job.cancelled) this.failPlayback(next, error);
       };
@@ -511,7 +517,7 @@ class GuildMusic {
     if (job?.error) return this.failPlayback(endedTrack, job.error);
     this.shortStreamFailures = 0;
     delete endedTrack.streamRetry;
-    // No awaiting child close: late failures are identity-guarded by job.onFailure.
+    // Pipeline EOF already requires successful child exit; do not await anything here.
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
@@ -542,12 +548,6 @@ class GuildMusic {
     this.playing = false;
     this.resumeOffsetSeconds = 0;
     updatePresence();
-    if (this.streamProcess) this.streamProcess.cancelled = true;
-    this.streamProcess?.kill();
-    this.streamProcess = null;
-    if (this.filterProcess) this.filterProcess.cancelled = true;
-    this.filterProcess?.kill();
-    this.filterProcess = null;
     this.player.stop(true);
     scheduleMusicSave();
   }
@@ -628,7 +628,6 @@ const getMusic = guild => {
 const reply = (interaction, content) => interaction.reply(
   typeof content === "string" ? { content } : content
 ).catch(() => {});
-const trackLine = (track, index) => `${index ? `${index}. ` : ""}**${track.title}** — ${track.author}`;
 const formatUptime = milliseconds => {
   const totalSeconds = Math.floor(milliseconds / 1000);
   const days = Math.floor(totalSeconds / 86400);
@@ -809,45 +808,35 @@ async function registerCommands() {
 client.once(Events.ClientReady, async ready => {
   console.log(`Logged in as ${ready.user.tag}`);
   updatePresence();
-  await registerCommands();
+  try { await registerCommands(); }
+  catch (error) { console.error(`[startup] Command registration failed: ${error.stack || error.message}`); }
   await loadMusicState();
   for (const [guildId, snapshot] of Object.entries(savedMusicStates)) {
-    if (typeof snapshot.voiceChannelId !== "string") continue;
-    const guild = await ready.guilds.fetch(guildId).catch(error => {
-      console.error(`[persistence:${guildId}] Could not load guild: ${error.message}`);
-      return null;
-    });
-    if (!guild) continue;
-    const channel = await guild.channels.fetch(snapshot.voiceChannelId).catch(error => {
-      console.error(`[persistence:${guildId}] Could not load saved voice channel: ${error.message}`);
-      return null;
-    });
-    if (!channel?.isVoiceBased()) {
-      console.error(`[persistence:${guildId}] Saved voice channel is unavailable or is not a voice channel.`);
-      continue;
-    }
     try {
+      if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid guild snapshot.");
+      if (typeof snapshot.voiceChannelId !== "string") continue;
+      const guild = await ready.guilds.fetch(guildId);
+      if (!guild) continue;
+      const channel = await guild.channels.fetch(snapshot.voiceChannelId);
+      if (!channel?.isVoiceBased()) throw new Error("Saved voice channel is unavailable.");
       await getMusic(guild).restore(snapshot, channel);
-    } catch (error) {
-      console.error(`[persistence:${guildId}] Could not restore music state: ${error.message}`);
-    }
+    } catch (error) { console.error(`[persistence:${guildId}] Could not restore music state: ${error.message}`); }
   }
-  if (config.autoJoin && config.voiceChannelId && config.voiceGuildId) {
-    const guild = await ready.guilds.fetch(config.voiceGuildId).catch(() => null);
-    const channel = await guild?.channels.fetch(config.voiceChannelId).catch(() => null);
-    if (channel?.isVoiceBased() && music.get(guild.id)?.connection?.state.status !== VoiceConnectionStatus.Ready) {
-      try {
+  try {
+    if (config.autoJoin && config.voiceChannelId && config.voiceGuildId) {
+      const guild = await ready.guilds.fetch(config.voiceGuildId);
+      const channel = await guild?.channels.fetch(config.voiceChannelId);
+      if (channel?.isVoiceBased() && music.get(guild.id)?.connection?.state.status !== VoiceConnectionStatus.Ready) {
         await getMusic(guild).connect(channel);
-        console.log(`Connected deafened to ${channel.name}.`);
-      } catch (error) {
-        console.error(`[24/7] ${error.message}`);
       }
     }
-  }
+  } catch (error) { console.error(`[24/7] ${error.message}`); }
+  startupComplete = !shuttingDown;
 });
 
 const handleCommand = async interaction => {
   if (!interaction.guild) return;
+  if (!startupComplete || shuttingDown) return reply(interaction, "The bot is still initializing or shutting down. Try again shortly.");
   if (interaction.commandName === "help") {
     const category = interaction.options.getString("category") || "all";
     return interaction.reply({
@@ -913,7 +902,7 @@ const handleCommand = async interaction => {
           });
         } catch (error) {
           console.error(`[command:play] Resolution error: ${error.message}`);
-          return interaction.editReply({ content: error.message });
+          return interaction.editReply({ content: "Could not load those tracks. Check the link, duration, and bot configuration; details are in the host logs." });
         }
       })();
 
@@ -994,7 +983,6 @@ const handleCommand = async interaction => {
       });
     }
     if (interaction.commandName === "stats") {
-      const { buildStatsEmbed } = require("./commands");
       return interaction.reply({
         embeds: [buildStatsEmbed(state, formatUptime(Date.now() - startedAt))]
       });
@@ -1096,7 +1084,7 @@ const handleCommand = async interaction => {
             await i.editReply({ content: `Added **${track.title}** to the queue!`, components: [] });
           } catch (error) {
             console.error(`[command:search] ${error.stack || error.message}`);
-            const payload = { content: error.message || "Could not add that search result.", ephemeral: true };
+            const payload = { content: "Could not add that search result. Check the host logs for details.", ephemeral: true };
             if (i.deferred || i.replied) await i.followUp(payload).catch(() => {});
             else await i.reply(payload).catch(() => {});
           }
@@ -1112,7 +1100,7 @@ const handleCommand = async interaction => {
     }
   } catch (error) {
     console.error(`[command:${interaction.commandName}] ${error.stack || error.message}`);
-    const errorMessage = error.message || "Something went wrong.";
+    const errorMessage = "The command could not be completed. Check permissions and input, then try again. Details are in the host logs.";
     if (interaction.deferred) await interaction.editReply(errorMessage).catch(() => {});
     else await reply(interaction, errorMessage);
   }
@@ -1151,6 +1139,15 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
   await handleCommand(interaction);
+});
+
+client.on(Events.GuildDelete, guild => {
+  const state = music.get(guild.id);
+  state?.disconnect();
+  music.delete(guild.id);
+  delete savedMusicStates[guild.id];
+  musicSaveChain = musicSaveChain.then(() => storage.deleteGuild(guild.id))
+    .catch(error => console.error(`[persistence:${guild.id}] Could not delete departed guild: ${error.message}`));
 });
 
 client.on(Events.MessageCreate, createMentionHandler(() => client.user?.id));
@@ -1206,6 +1203,7 @@ function dashboardGuildSnapshot(guild) {
 }
 
 async function controlDashboard(payload) {
+  if (!startupComplete || shuttingDown) throw dashboardError("The bot is still initializing or shutting down.", 503);
   const { guildId, action } = payload;
   if (typeof guildId !== "string" || !/^\d{17,20}$/.test(guildId)) {
     throw dashboardError("Choose a valid Discord server.");
@@ -1286,7 +1284,7 @@ async function controlDashboard(payload) {
   return dashboardGuildSnapshot(guild);
 }
 
-createHealthServer({
+const healthServer = createHealthServer({
   page: healthPage,
   dashboardPage,
   dashboardToken: config.dashboardToken,
@@ -1299,7 +1297,7 @@ createHealthServer({
   },
   controlDashboard,
   getStatus() {
-    const ready = client.isReady();
+    const ready = client.isReady() && startupComplete && !shuttingDown;
     const active = [...music.values()].find(state => state.playing && state.current);
     const track = active?.current;
     return {
@@ -1314,32 +1312,54 @@ createHealthServer({
         positionSeconds: Math.floor(playbackPosition(active)),
         durationSeconds: track.duration || null,
         playbackRate: active.resourcePlaybackRate || 1,
-        status: active.player.state.status === AudioPlayerStatus.AutoPaused ? "paused" : active.player.state.status,
-        server: active.guild.name
+        status: active.player.state.status === AudioPlayerStatus.AutoPaused ? "paused" : active.player.state.status
       } : null
     };
   }
 }).listen(config.port, () => console.log(`Health website listening on :${config.port}/health`));
 
-async function shutdown() {
+async function shutdown(exitCode = 0) {
+  if (shutdownPromise) return shutdownPromise;
+  shuttingDown = true;
+  startupComplete = false;
   clearTimeout(musicSaveTimer);
-  await musicSaveChain;
-  await writeMusicState().catch(error => console.error(`[persistence] Could not save state during shutdown: ${error.message}`));
-  for (const state of music.values()) {
-    state.invalidateNext();
-    state.cancelActive();
-    if (state.streamProcess) state.streamProcess.cancelled = true;
-    state.streamProcess?.kill();
-    if (state.filterProcess) state.filterProcess.cancelled = true;
-    state.filterProcess?.kill();
-    state.connection?.destroy();
-  }
-  client.destroy();
-  process.exit(0);
+  const cleanup = () => {
+    for (const state of music.values()) {
+      state.voiceGeneration = (state.voiceGeneration || 0) + 1;
+      state.invalidateNext();
+      state.cancelActive();
+      clearTimeout(state.emptyTimer);
+      const connection = state.connection;
+      state.connection = null;
+      if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
+    }
+    for (const channelId of liveNowPlaying.keys()) stopLiveNowPlaying(channelId);
+    healthServer.close();
+    client.destroy();
+  };
+  // A failed storage/network call must not leave children running indefinitely.
+  const deadline = setTimeout(() => { cleanup(); process.exit(1); }, 10000);
+  deadline.unref?.();
+  shutdownPromise = (async () => {
+    try {
+      await musicSaveChain;
+      await writeMusicState();
+    } catch (error) { console.error(`[persistence] Shutdown save failed: ${error.message}`); }
+    finally { clearTimeout(deadline); cleanup(); process.exit(exitCode); }
+  })();
+  return shutdownPromise;
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => { void shutdown(); });
+process.on("SIGTERM", () => { void shutdown(); });
+process.on("unhandledRejection", error => {
+  console.error("[process] Unhandled rejection:", error?.stack || error);
+  void shutdown(1);
+});
+process.on("uncaughtException", error => {
+  console.error("[process] Uncaught exception:", error?.stack || error);
+  void shutdown(1);
+});
 
 client.on(Events.Error, error => {
   console.error(`[discord] Client error: ${error.code || error.name}`);

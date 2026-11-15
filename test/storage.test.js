@@ -173,9 +173,9 @@ test("corrupt JSON state is left untouched and writes stay disabled", async () =
 
 test("shutdown waits for queued save, flushes latest state, then disconnects", async () => {
   const source = await fs.readFile(require.resolve("../src/index"), "utf8");
-  const start = source.indexOf("let musicSaveTimer =");
+  const start = source.indexOf("let startupComplete =");
   const end = source.indexOf("\nclass GuildMusic", start);
-  const shutdownStart = source.indexOf("async function shutdown()");
+  const shutdownStart = source.indexOf("async function shutdown(");
   const shutdownEnd = source.indexOf('\nprocess.on("SIGINT"', shutdownStart);
   const operations = [];
   let scheduled;
@@ -184,7 +184,8 @@ test("shutdown waits for queued save, flushes latest state, then disconnects", a
   const storage = { loadAll: async () => ({}), saveGuilds: async () => { operations.push("save"); if (operations.length === 1) await pending; } };
   const api = vm.runInNewContext(`${source.slice(start, end)}\n${source.slice(shutdownStart, shutdownEnd)}\n({ loadMusicState, scheduleMusicSave, shutdown });`, {
     storage, music: new Map(), console: { error() {} },
-    setTimeout: callback => { scheduled = callback; }, clearTimeout() {},
+    setTimeout: callback => { scheduled = callback; return { unref() {} }; }, clearTimeout() {},
+    liveNowPlaying: new Map(), healthServer: { close() {} },
     client: { destroy: () => operations.push("disconnect") }, process: { exit: () => operations.push("exit") }
   });
   await api.loadMusicState();
@@ -200,5 +201,5 @@ test("shutdown waits for queued save, flushes latest state, then disconnects", a
   await api.loadMusicState();
   operations.length = 0;
   await api.shutdown();
-  assert.deepEqual(operations, ["disconnect", "exit"]);
+  assert.deepEqual(operations, [], "Shutdown is idempotent after completion");
 });

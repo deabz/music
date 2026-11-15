@@ -2,7 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
-const { createAudioPipeline, PREFETCH_BYTES } = require("../src/audio-pipeline");
+const { createAudioPipeline, PREFETCH_BYTES, terminateChild } = require("../src/audio-pipeline");
 
 function launcher() {
   const calls = [];
@@ -74,4 +74,19 @@ test("EOF is released only after successful child close without awaiting a promi
   fixture.calls[0].child.emit("close", 0);
   assert.equal(job.stream.writableEnded, true);
   job.cancel();
+});
+test("Windows cancellation targets the process tree, with fallback on taskkill failure", () => {
+  let kills = 0;
+  const child = { pid: 12345, kill() { kills++; } };
+  let argumentsUsed;
+  const killer = new EventEmitter();
+  terminateChild(child, "win32", (file, args, options) => {
+    argumentsUsed = { file, args, options }; return killer;
+  });
+  assert.equal(argumentsUsed.file, "taskkill");
+  assert.deepEqual(argumentsUsed.args, ["/PID", "12345", "/T", "/F"]);
+  assert.equal(argumentsUsed.options.windowsHide, true);
+  assert.equal(kills, 0);
+  killer.emit("close", 1);
+  assert.equal(kills, 1);
 });

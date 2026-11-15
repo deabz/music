@@ -6,6 +6,19 @@ const { youtubeCookieOptions, youtubeRuntimeOptions, formatYtdlpTime } = require
 
 // Backpressure bounds the unread output; child pipes have small additional buffers.
 const PREFETCH_BYTES = 2 * 1024 * 1024;
+function terminateChild(child, platform = process.platform, launch = spawn, killGroup = process.kill) {
+  if (child.pipelineClosed) return;
+  if (Number.isInteger(child.pid) && platform === "win32") {
+    // yt-dlp can itself spawn FFmpeg for download-sections. Kill that tree too.
+    try {
+      const killer = launch("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      killer.on("error", () => child.kill());
+      killer.on("close", code => { if (code !== 0 && !child.pipelineClosed) child.kill(); });
+    } catch { child.kill(); }
+  } else if (Number.isInteger(child.pid) && platform !== "win32") {
+    try { killGroup(-child.pid, "SIGKILL"); } catch { child.kill(); }
+  } else child.kill();
+}
 function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
   const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES });
   const job = { stream, cancelled: false, error: null, downloadDone: false, outputDone: false,
@@ -24,7 +37,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
     if (job.cancelled) return;
     job.cancelled = true;
     for (const child of job.children) {
-      child.kill();
+      terminateChild(child);
       child.stdin?.destroy();
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -59,7 +72,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
       ...(offset > 0 ? { downloadSections: `*${formatYtdlpTime(offset)}-inf` } : {}) };
     // Native spawn avoids tinyspawn's unbounded duplicate stdout collection.
     const download = watch(launch(ytdlp.constants.YOUTUBE_DL_PATH,
-      [...ytdlp.args(options), "--", track.url], { stdio: ["ignore", "pipe", "pipe"] }), "yt-dlp", true);
+      [...ytdlp.args(options), "--", track.url], { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] }), "yt-dlp", true);
     job.download = download;
     const effects = [];
     if (filters.bassboost) effects.push("bass=g=10");
@@ -69,7 +82,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
     if (effects.length) {
       const filter = watch(launch(ffmpeg, ["-hide_banner", "-loglevel", "error", "-i", "pipe:0",
         "-af", effects.join(","), "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
-      { stdio: ["pipe", "pipe", "pipe"] }), "FFmpeg");
+      { windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] }), "FFmpeg");
       job.inputType = "raw";
       download.stdout.pipe(filter.stdin);
       output(filter.stdout);
@@ -77,4 +90,4 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
   } catch (error) { fail(error); job.cancel(); }
   return job;
 }
-module.exports = { createAudioPipeline, PREFETCH_BYTES };
+module.exports = { createAudioPipeline, PREFETCH_BYTES, terminateChild };

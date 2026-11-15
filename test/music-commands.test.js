@@ -30,6 +30,7 @@ function commandHandler(state, overrides = {}) {
   const start = source.indexOf("const handleCommand =");
   const end = source.indexOf("\nclient.on(Events.VoiceStateUpdate", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nhandleCommand;`, {
+    startupComplete: true, shuttingDown: false,
     getMusic: () => state,
     musicAccessError: () => null,
     ChannelType: require("discord.js").ChannelType,
@@ -48,6 +49,8 @@ function guildMusicClass(overrides = {}) {
   const end = source.indexOf("\nconst client =", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     AudioPlayerStatus,
+    shuttingDown: false,
+    AbortController,
     createAudioPipeline() { throw new Error("Synthetic stream boundary"); },
     console: quietConsole,
     updatePresence() {},
@@ -253,7 +256,8 @@ test("search menu uses bounded values and reports selection failures ephemerally
   state.add = async () => { throw new Error("Cannot connect"); };
   selection.followUp = async value => { failure = value; };
   await collect(selection);
-  assert.equal(failure.content, "Cannot connect");
+  assert.match(failure.content, /Could not add/);
+  assert.ok(!failure.content.includes("Cannot connect"));
   assert.equal(failure.ephemeral, true);
 });
 
@@ -505,4 +509,39 @@ test("queue numbers are waiting positions across pages, current appears separate
   assert.match(second.description, /waiting 11/);
   const buttons = buildQueueComponents({ current, queue: queue.slice(0, 10) })[0].toJSON();
   assert.equal(buttons.components[1].disabled, true);
+});
+
+
+test("notification channel is restored and additions do not overwrite it", async () => {
+  const GuildMusic = guildMusicClass({ config: { maxQueueSize: 10, defaultVolume: 80 }, hasAllowedDuration: n => n > 0 && n <= 1800 });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { queue: [], autoplayTriedUrls: new Set(), connect: async () => {}, playNext: async () => {},
+    prepareNext() {}, playing: false, player: { state: {} } });
+  await state.restore({ voiceChannelId: "voice", notificationChannelId: "chosen", queue: [] }, {});
+  assert.equal(state.notificationChannelId, "chosen");
+  await state.add([{ title: "song", duration: 60 }], {}, "user", { id: "invoking" });
+  assert.equal(state.notificationChannelId, "chosen");
+  state.notificationChannelId = null;
+  await state.add([{ title: "song", duration: 60 }], {}, "user", { id: "invoking" });
+  assert.equal(state.notificationChannelId, "invoking");
+  await assert.rejects(state.restoreState(null, {}), /Invalid saved snapshot/);
+});
+
+test("guild removal disconnects, deletes in-memory state and serializes stored deletion", async () => {
+  let disconnected = 0, deleted;
+  const music = new Map([["guild", { disconnect() { disconnected++; } }]]);
+  const handler = eventHandler("GuildDelete", { music, savedMusicStates: { guild: {} }, musicSaveChain: Promise.resolve(),
+    storage: { deleteGuild: async id => { deleted = id; } }, console: quietConsole });
+  handler({ id: "guild" });
+  await new Promise(setImmediate);
+  assert.equal(disconnected, 1); assert.equal(music.has("guild"), false); assert.equal(deleted, "guild");
+});
+
+test("library errors are logged but Discord receives a generic response", async () => {
+  let response;
+  const handler = commandHandler({ connect: async () => { throw new Error("PRIVATE_PATH_AND_LIBRARY_DETAILS"); } });
+  await handler({ guild: {}, commandName: "join", member: { voice: { channel: {} } },
+    deferReply: async () => {}, reply: async text => { response = text; } });
+  assert.ok(!JSON.stringify(response).includes("PRIVATE_PATH"));
+  assert.match(response, /could not be completed/);
 });

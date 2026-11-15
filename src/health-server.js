@@ -130,7 +130,7 @@ function createHealthServer({ page, dashboardPage, getStatus, dashboardToken, ge
         ...(track ? { track: {
           title: track.title, artist: track.artist, thumbnail: track.thumbnail,
           positionSeconds: track.positionSeconds, durationSeconds: track.durationSeconds,
-          status: track.status, server: track.server, playbackRate: track.playbackRate || 1
+          status: track.status, playbackRate: track.playbackRate || 1
         } } : {})
       });
       return;

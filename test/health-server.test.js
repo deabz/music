@@ -123,6 +123,8 @@ test("health readiness, schema, pretty JSON, redirect and private-field filterin
     const snapshot = await online.json();
     assert.equal(snapshot.pingMs, 42);
     assert.equal(snapshot.track.positionSeconds, 15.25);
+    assert.ok(!("server" in snapshot.track));
+    assert.ok(!JSON.stringify(snapshot).includes("Music server"));
     assert.ok(!JSON.stringify(snapshot).includes("private"));
     const redirect = await fetch(`${base}/healthz`, { headers: { Accept: "text/html" }, redirect: "manual" });
     assert.equal(redirect.status, 302);

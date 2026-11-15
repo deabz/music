@@ -67,7 +67,7 @@ const isSongResult = result =>
   result.durationInSec > 0 &&
   result.durationInSec <= MAX_SUGGESTED_TRACK_DURATION_SECONDS;
 
-async function searchYouTube(query, limit = 10, runYtdlp = ytdlp) {
+async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undefined) {
   const resultCount = Math.max(1, Math.min(20, Math.floor(limit) || 10));
   const result = await runYtdlp(`ytsearch${resultCount}:${query}`, {
     dumpSingleJson: true,
@@ -78,7 +78,7 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp) {
     ...youtubeCookieOptions(),
     ...youtubeRuntimeOptions(),
     ffmpegLocation: require('ffmpeg-static')
-  });
+  }, { signal, timeout: 10000, windowsHide: true });
   const entries = Array.isArray(result.entries) ? result.entries : [];
   return entries.map(entry => ({
     url: entry.webpage_url || entry.original_url || entry.url || (entry.id ? `https://www.youtube.com/watch?v=${entry.id}` : null),
@@ -120,6 +120,7 @@ async function resolveSuggestedTrack(track, triedUrls, search, artworkFrom) {
         }
       }
     } catch (error) {
+      if (error.name === "AbortError") throw error;
       errors.push(error);
       console.error(`[autoplay] Search failed for "${query}": ${error.message}`);
     }
