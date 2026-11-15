@@ -43,7 +43,20 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, log = c
     }
     await interaction.deferUpdate();
     try {
-      if (action === "effects-apply") {
+      if (action === "suggest") {
+        const selected = state.suggestions?.take(interaction.values?.[0]);
+        if (!selected) {
+          await interaction.followUp({ content: "That suggestion is no longer available.", ephemeral: true });
+          return true;
+        }
+        try {
+          const channelId = state.connection?.joinConfig.channelId || interaction.member?.voice?.channelId;
+          const voiceChannel = await interaction.guild.channels.fetch(channelId);
+          const { id, ...track } = selected;
+          await state.add([{ ...track, autoSuggested: false }], voiceChannel, interaction.user.id, interaction.channel);
+          await interaction.followUp({ content: `Added ${selected.title.slice(0, 100)}.`, ephemeral: true, allowedMentions: { parse: [] } });
+        } catch (error) { state.suggestions.restore(selected); throw error; }
+      } else if (action === "effects-apply") {
         await state.setAudioFilters(interaction.values);
         await interaction.editReply({ content: "Audio effects updated.", components: [] });
       } else if (action === "play") {

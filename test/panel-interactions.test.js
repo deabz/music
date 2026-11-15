@@ -71,3 +71,22 @@ test("effects menu preselects enabled filters and submits one exact set includin
   await f.handler(f.interaction);
   assert.deepEqual(applied, [["bassboost", "nightcore"], []]);
 });
+
+
+test("suggestion selection claims once, uses clicking requester and restores the option on add failure", async () => {
+  const f = fixture("suggest");
+  const selected = { id: "short", title: "Suggested", url: "url", duration: 120, autoSuggested: true };
+  let available = true, restored = 0, added;
+  f.state.suggestions = { take: id => id === "short" && available ? (available = false, selected) : null,
+    restore: () => { restored++; available = true; } };
+  f.interaction.values = ["short"];
+  f.interaction.guild.channels = { fetch: async () => ({ id: "voice" }) };
+  f.state.add = async (tracks, channel, user) => { added = { tracks, channel, user }; };
+  await f.handler(f.interaction);
+  assert.equal(added.user, "listener"); assert.equal(added.tracks[0].autoSuggested, false);
+  assert.equal(added.channel.id, "voice"); assert.ok(!("id" in added.tracks[0]));
+  await f.handler(f.interaction);
+  assert.match(f.calls.at(-1).content, /no longer available/);
+  available = true; f.state.add = async () => { throw new Error("full queue"); };
+  await f.handler(f.interaction); assert.equal(restored, 1);
+});

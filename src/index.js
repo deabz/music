@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const storage = require("./storage");
+const { PanelSuggestions } = require("./panel-suggestions");
 const { createPlayerPanel } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
@@ -154,6 +155,8 @@ class GuildMusic {
     this.panelChannelId = null;
     this.panelMessageId = null;
     this.panel = createPlayerPanel(this, scheduleMusicSave);
+    this.suggestions = new PanelSuggestions(this, { changed: () => this.panel.scheduleUpdate() });
+    this.panelSuggestions = null;
     this.playing = false;
     this.totalTracksPlayed = 0;
     this.audioFilters = {
@@ -167,6 +170,7 @@ class GuildMusic {
       console.log(`[${new Date().toISOString()}] [player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
       if (next.status === AudioPlayerStatus.Playing) {
         if (this.activePipeline && !this.activePipeline.startedAt) this.activePipeline.startedAt = Date.now();
+        this.suggestions?.load(this.current);
         this.prepareNext();
       }
       if (next.status === AudioPlayerStatus.Playing && this.pauseOnRestore) {
@@ -423,12 +427,16 @@ class GuildMusic {
     while (this.autoplayTriedUrls.size > 50) this.autoplayTriedUrls.delete(this.autoplayTriedUrls.values().next().value);
     const controller = new AbortController();
     this.suggestionAbort = controller;
-    resolveSuggestedTrack(current, this.autoplayTriedUrls,
-      (query, options) => searchYouTube(query, options.limit, undefined, controller.signal), artworkFrom)
+    const suggestionTask = this.suggestions
+      ? this.suggestions.candidates(current).then(items => items.find(item => !this.autoplayTriedUrls.has(item.url)) || null)
+      : resolveSuggestedTrack(current, this.autoplayTriedUrls,
+        (query, options) => searchYouTube(query, options.limit, undefined, controller.signal), artworkFrom);
+    suggestionTask
       .then(suggestion => {
         if (!suggestion || generation !== this.nextGeneration || (this.current && this.current !== current) || this.queue.length) return;
         this.autoplayTriedUrls.add(suggestion.url);
         this.queue.push(suggestion);
+        this.suggestions?.removeUrl(suggestion.url);
         scheduleMusicSave();
         if (!this.current) this.playNext();
         else this.prepareNext(false);
@@ -618,6 +626,7 @@ class GuildMusic {
   }
 
   stop() {
+    this.suggestions?.clearActive();
     this.voiceGeneration = (this.voiceGeneration || 0) + 1;
     this.invalidateNext();
     this.cancelActive();
@@ -1147,6 +1156,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
 client.on(Events.GuildDelete, guild => {
   const state = music.get(guild.id);
+  state?.suggestions?.dispose();
   state?.panel?.dispose();
   state?.disconnect();
   music.delete(guild.id);
@@ -1330,6 +1340,7 @@ async function shutdown(exitCode = 0) {
   clearTimeout(musicSaveTimer);
   const cleanup = () => {
     for (const state of music.values()) {
+      state.suggestions?.dispose();
       state.panel?.dispose();
       state.voiceGeneration = (state.voiceGeneration || 0) + 1;
       state.invalidateNext();

@@ -108,11 +108,11 @@ async function searchYouTube(query, limit = 10, runYtdlp = ytdlp, signal = undef
   })).filter(entry => entry.url && entry.title);
 }
 
-async function resolveSuggestedTrack(track, triedUrls, search, artworkFrom) {
+async function resolveSuggestedTracks(track, triedUrls, search, artworkFrom) {
   const titleArtist = String(track.title || "").split(/\s+[-\u2013\u2014]\s+/);
   const artist = (titleArtist.length > 1 ? titleArtist[0] : String(track.author || "").split(",")[0])
     .replace(/\s*[-\u2013\u2014]\s*Topic$|VEVO$|\s+Official(?:\s+Channel)?$/i, "").trim();
-  if (!artist) return null;
+  if (!artist) return [];
   const endedTitle = normalizeTitle(track.title, artist);
   const candidates = new Map();
   const errors = [];
@@ -144,16 +144,16 @@ async function resolveSuggestedTrack(track, triedUrls, search, artworkFrom) {
     }
   }
 
-  const suggestion = [...candidates.values()].sort((a, b) => b.suggestionScore - a.suggestionScore)
-    .find(candidate => !triedUrls.has(candidate.url));
-  if (suggestion) return suggestion;
-  if (!candidates.size && errors.length === 2) {
-    throw new Error(`Could not search for a suggested song: ${errors.map(error => error.message).join("; ")}`);
+  const suggestions = [...candidates.values()].sort((a, b) => b.suggestionScore - a.suggestionScore)
+    .filter(candidate => !triedUrls.has(candidate.url)).slice(0, 10);
+  if (!suggestions.length && !candidates.size && errors.length === 2) {
+    throw new Error(`Could not search for suggested songs: ${errors.map(error => error.message).join("; ")}`);
   }
-  if (candidates.size) {
-    console.log(`[autoplay] Tried all ${candidates.size} short suggestions for ${track.title}.`);
-  }
-  return null;
+  return suggestions;
+}
+
+async function resolveSuggestedTrack(...args) {
+  return (await resolveSuggestedTracks(...args))[0] || null;
 }
 
 function buildGeniusSearchUrl(title, artist) {
@@ -189,4 +189,4 @@ async function resolvePlaylist(url, runYtdlp = ytdlp) {
   })).filter(entry => entry.url && entry.title && hasAllowedDuration(entry.duration));
 }
 
-module.exports = { AUTOPLAY_REJECT_KEYWORDS, suggestionScore, MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };
+module.exports = { AUTOPLAY_REJECT_KEYWORDS, suggestionScore, MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, isSongResult, resolveSuggestedTrack, resolveSuggestedTracks, searchYouTube, buildGeniusSearchUrl, resolvePlaylist, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies };
