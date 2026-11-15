@@ -8,7 +8,7 @@ test("panel renders plain linked titles, matching queue numbers, counts, request
   const embed = payload.embeds[0];
   assert.equal(embed.title, "2 tracks in queue");
   assert.ok(embed.description.startsWith("["));
-  assert.match(embed.description, /A{49}\u2026\]\(https:/);
+  assert.match(embed.description, /A{80}\]\(https:/);
   assert.match(embed.description, /`1\.` \*\*Waiting\*\*/);
   assert.match(embed.description, /\[`02:05`\],\n\*Requested by -\* <@12345678901234567>/);
   assert.deepEqual(embed.footer, { text: "Volume: 90", icon_url: "https://example.com/bot.png" });
@@ -117,12 +117,12 @@ test("reference embed separates the current requester from unlinked numbered wai
   assert.deepEqual(many.allowedMentions, { parse: [], users: [], roles: [], repliedUser: false });
 });
 
-test("waiting titles truncate at forty characters and hostile markdown/mentions remain inert", () => {
+test("waiting titles retain full text below the safety cap and hostile markdown/mentions remain inert", () => {
   const state = { current: track("[Fake](bad)* @everyone <@&12345678901234567>"),
     queue: [track("A".repeat(100)), track("**bold** @here <@12345678901234567>")], loop: "off" };
   const payload = buildPlayerPanel(state);
   const text = payload.embeds[0].description;
-  assert.ok(text.includes("A".repeat(39) + "\u2026"));
+  assert.ok(text.includes("A".repeat(100)));
   assert.ok(text.includes("\\[Fake\\](bad)\\*"));
   assert.ok(!text.includes("@everyone")); assert.ok(!text.includes("@here"));
   assert.ok(text.length <= 4096);

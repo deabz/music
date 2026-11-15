@@ -3,6 +3,7 @@ const PANEL_PREFIX = "panel:";
 const PANEL_REPOST_ON_TRACK_CHANGE = true;
 const PANEL_REPOST_DELAY_MS = 1500;
 const PANEL_SUGGESTION_COUNT = 5;
+const TRACK_TITLE_MAX_LENGTH = 200;
 const short = (value, limit) => {
   const text = String(value || "Unknown track").replace(/[\u0000-\u001f\u007f]+/g, " ");
   if (text.length <= limit) return text;
@@ -12,8 +13,19 @@ const short = (value, limit) => {
 };
 const markdown = value => String(value).replace(/[\\[\]*_~`|]/g, "\\$&");
 const escapePanelText = value => markdown(value).replace(/@(?=everyone\b|here\b|[!&]?\d+)/gi, "@\u200b");
-function trackLink(track) {
-  const title = escapePanelText(short(track.title, 50));
+function formatTrackTitle(value, budget = Infinity) {
+  const text = escapePanelText(short(value, TRACK_TITLE_MAX_LENGTH));
+  if (text.length <= budget) return text;
+  if (budget < 1) return "";
+  let result = "";
+  for (const token of text.match(/\\[\s\S]|[\s\S]/gu) || []) {
+    if (result.length + token.length > budget - 1) break;
+    result += token;
+  }
+  return result + "\u2026";
+}
+function trackLink(track, titleBudget = Infinity) {
+  const title = formatTrackTitle(track.title, titleBudget);
   try {
     const url = new URL(track.url);
     if (!["http:", "https:"].includes(url.protocol) || url.href.length > 600) return title;
@@ -47,7 +59,7 @@ function buildPlayerPanel(state, { avatarUrl } = {}) {
   if (queue.length) {
     lines.push("", "**Up Next:**");
     for (const track of queue.slice(0, 10)) {
-      const title = escapePanelText(short(track.title, 40));
+      const title = formatTrackTitle(track.title);
       const line = `\`${shown + 1}.\` **${title}** \u2014 [\`${duration(track.duration)}\`] \u2014 ${requester(track)}`;
       if ([...lines, line].join("\n").length > 3900) break;
       lines.push(line); shown++;
@@ -262,4 +274,4 @@ function buildPlayConfirmation(tracks) {
     : `**${tracks.length} tracks** added to the queue`,
   ephemeral: false, allowedMentions: { parse: [], users: [], roles: [], repliedUser: false } };
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, buildPlayConfirmation, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, PANEL_REPOST_ON_TRACK_CHANGE, PANEL_REPOST_DELAY_MS, short, escapePanelText };
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, buildPlayConfirmation, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, PANEL_REPOST_ON_TRACK_CHANGE, PANEL_REPOST_DELAY_MS, TRACK_TITLE_MAX_LENGTH, formatTrackTitle, short, escapePanelText };
