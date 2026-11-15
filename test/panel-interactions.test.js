@@ -13,7 +13,7 @@ function fixture(action, channelId = "voice", permissions = 0n) {
     skip: async () => calls.push("skip"), queueChanged: () => calls.push("queueChanged"),
     adjustVolume: amount => calls.push(amount), seek: async position => calls.push(position),
     shuffle: () => calls.push("shuffle"), stop: () => calls.push("stop") };
-  const interaction = { customId: "panel:" + action, guild: { id: "guild" }, message: { id: "message" },
+  const interaction = { customId: "panel:" + action, guild: { id: "guild", voiceStates: { cache: new Map([["listener", { channelId }]]) } }, message: { id: "message" },
     user: { id: "listener" }, isButton: () => true, member: { voice: { channelId } }, memberPermissions: new PermissionsBitField(permissions),
     reply: async value => calls.push(value), deferUpdate: async () => calls.push("defer"), followUp: async value => calls.push(value) };
   return { state, interaction, calls, handler: createPanelInteractionHandler({ getMusic: () => state, lyrics: { open: async (interaction, options) => interaction.reply({ content: "Mock lyrics", ephemeral: options.panel }) }, log() {} }) };
@@ -28,17 +28,17 @@ test("ordinary actions defer first, call existing methods, and schedule panel up
   const f = fixture("loop");
   for (const mode of ["track", "queue", "off"]) { await f.handler(f.interaction); assert.equal(f.state.loop, mode); }
 });
-test("playback panel controls require voice access, with Manage Server/Admin overrides", async () => {
+test("playback panel controls require voice access even for Manage Server/Admin", async () => {
   for (const action of Object.keys(ACTION_PERMISSIONS).filter(action => action !== "lyrics")) {
     const f = fixture(action, "elsewhere");
     if (["effects-apply", "favourites-select"].includes(action)) f.interaction.customId += ":listener"; await f.handler(f.interaction);
     assert.equal(f.calls.length, 1, action); assert.equal(f.calls[0].ephemeral, true);
-    assert.match(f.calls[0].content, /voice channel/);
+    assert.match(f.calls[0].content, /Join <#voice>/);
     for (const role of [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.Administrator]) {
-      const manager = fixture(action, "elsewhere", role);
+      const manager = fixture(action, "voice", role);
       if (["effects-apply", "favourites-select"].includes(action)) { manager.interaction.customId += ":listener"; manager.state.setAudioFilters = async () => {}; manager.interaction.editReply = async () => {}; }
       await manager.handler(manager.interaction);
-      assert.ok(!manager.calls.some(item => item.content?.includes("Join the bot's voice channel")));
+      assert.ok(!manager.calls.some(item => item.content?.includes("Join <#voice>")));
     }
   }
 });

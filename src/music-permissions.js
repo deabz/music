@@ -1,19 +1,28 @@
 const { PermissionFlagsBits } = require("discord.js");
 const controls = new Set(["pause", "resume", "skip", "stop", "leave", "clear", "remove", "move",
   "shuffle", "loop", "volume", "volup", "voldown", "bassboost", "eightd", "nightcore", "echo", "forward"]);
+function currentVoiceChannelId(interaction) {
+  return interaction.guild?.voiceStates?.cache?.get(interaction.user?.id)?.channelId || null;
+}
+function botVoiceChannelId(state) {
+  const connection = state?.connection;
+  return connection?.state?.status !== "destroyed" ? connection?.joinConfig?.channelId || null : null;
+}
+function playbackControlError(interaction, state) {
+  const botChannel = botVoiceChannelId(state);
+  if (!botChannel) return "The bot is not connected to a voice channel.";
+  return currentVoiceChannelId(interaction) === botChannel ? null : `Join <#${botChannel}> to control the music.`;
+}
 function musicAccessError(interaction, state, command = interaction.commandName) {
   const permissions = interaction.memberPermissions;
   const manager = permissions?.has(PermissionFlagsBits.ManageGuild)
     || permissions?.has(PermissionFlagsBits.Administrator);
   if (["set-notification-channel", "247"].includes(command) && !manager) return "You need Manage Server to use this command.";
-  if (manager) return null;
-  const channelId = interaction.member?.voice?.channelId || interaction.member?.voice?.channel?.id;
-  const connection = state.connection;
-  const botChannel = connection && connection.state.status !== "destroyed" ? connection.joinConfig.channelId : null;
-  if (controls.has(command) && (!botChannel || channelId !== botChannel)) return "Join the bot's voice channel to use this control.";
-  if (["play", "join"].includes(command) && state.playing && state.current && botChannel && channelId !== botChannel) {
-    return "Music is active in another voice channel. Join that channel or ask someone with Manage Server to move the bot.";
+  if (controls.has(command)) return playbackControlError(interaction, state);
+  const botChannel = botVoiceChannelId(state);
+  if (["play", "join", "247"].includes(command) && state?.playing && state?.current && botChannel) {
+    return playbackControlError(interaction, state);
   }
   return null;
 }
-module.exports = { musicAccessError };
+module.exports = { musicAccessError, playbackControlError, currentVoiceChannelId };
