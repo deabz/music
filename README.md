@@ -131,7 +131,7 @@ permission failures log once and wait for an explicit command before retrying.
 - Play resumes; Pause pauses; Next skips. Previous restarts after five seconds, otherwise returns
   to one of the last 20 completed/skipped tracks and puts the current song back in the queue.
 - Loop cycles off, track, queue. Volume changes by 10 within 0-200. Rewind/Forward seek ten seconds.
-- Lyrics opens a private Genius search. Shuffle changes waiting tracks. Stop clears playback and
+- Lyrics shows private LRCLIB lyrics without requiring voice access; when idle it opens the song popup. Shuffle changes waiting tracks. Stop clears playback and
   queue but keeps the voice connection and idle panel.
 - Effects opens a private multi-select; the chosen set is applied in one restart, keeping position.
 - Suggestions reuse autoplay filtering and are cached per track; selecting one queues it as you.

@@ -67,7 +67,7 @@ function buildPlayerPanel(state, { avatarUrl } = {}) {
     let disabled = !state.current;
     if (action === "play") disabled = !state.current || status !== "paused";
     if (action === "pause") disabled = !state.current || status !== "playing";
-    if (["vol-down", "vol-up", "favourites"].includes(action)) disabled = false;
+    if (["vol-down", "vol-up", "favourites", "lyrics"].includes(action)) disabled = false;
     if (action === "shuffle") disabled = queue.length < 2;
     if (["stop", "loop"].includes(action)) disabled = !tracks.length;
     return { type: 2, custom_id: PANEL_PREFIX + action, label, style: action === "loop" && (state.loop || "off") !== "off" ? 3 : 2,

@@ -1,6 +1,5 @@
 const { musicAccessError } = require("./music-permissions");
 const { playbackPosition } = require("./playback-position");
-const { buildGeniusSearchUrl } = require("./music-utils");
 const { PANEL_PREFIX, buildEffectsMenu, buildFavouritesMenu } = require("./player-panel");
 
 const ACTION_PERMISSIONS = {
@@ -9,7 +8,7 @@ const ACTION_PERMISSIONS = {
   "favourites-select": "volume", "effects-apply": "echo", lyrics: "forward", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "volume", suggest: "volume"
 };
 const privateReply = (interaction, content) => interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
-function createPanelInteractionHandler({ getMusic, isReady = () => true, favourites, log = console.error } = {}) {
+function createPanelInteractionHandler({ getMusic, isReady = () => true, favourites, lyrics, log = console.error } = {}) {
   const handle = async interaction => {
     if (!interaction.customId?.startsWith(PANEL_PREFIX) || !(interaction.isButton?.() || interaction.isStringSelectMenu?.())) return false;
     if (!interaction.guild || !isReady()) {
@@ -24,7 +23,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
     const permission = ACTION_PERMISSIONS[action];
     if (!permission) { await privateReply(interaction, "This player control is unavailable."); return true; }
     const state = getMusic(interaction.guild);
-    const denied = musicAccessError(interaction, state, permission);
+    const denied = action === "lyrics" ? null : musicAccessError(interaction, state, permission);
     if (denied) { await privateReply(interaction, denied); return true; }
     if (!temporary && state.panelMessageId && interaction.message?.id !== state.panelMessageId) {
       await privateReply(interaction, "This is an old panel. Use /nowplaying to bring back the current player.");
@@ -37,8 +36,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
       return true;
     }
     if (action === "lyrics") {
-      await privateReply(interaction, state.current
-        ? buildGeniusSearchUrl(state.current.title, state.current.author) : "Nothing is playing.");
+      await lyrics.open(interaction, { track: state.current, panel: true });
       return true;
     }
     await interaction.deferUpdate();

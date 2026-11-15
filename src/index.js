@@ -27,7 +27,7 @@ const {
 const { createHealthServer } = require("./health-server");
 const { healthPage } = require("./health-page");
 const { dashboardPage } = require("./dashboard-page");
-const { MAX_TRACK_DURATION_SECONDS, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, prepareYouTubeCookies } = require("./music-utils");
+const { MAX_TRACK_DURATION_SECONDS, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, prepareYouTubeCookies } = require("./music-utils");
 const {
   ActivityType,
   ChannelType,
@@ -1149,7 +1149,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
-const handlePanelInteraction = createPanelInteractionHandler({ getMusic, favourites, isReady: () => startupComplete && !shuttingDown });
+const handlePanelInteraction = createPanelInteractionHandler({ getMusic, favourites, lyrics, isReady: () => startupComplete && !shuttingDown });
 
 client.on(Events.InteractionCreate, async interaction => {
   if (await lyrics.handleModal(interaction)) return;
