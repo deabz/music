@@ -4,10 +4,10 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 
 const source = fs.readFileSync(require.resolve("../src/index"), "utf8");
-const start = source.indexOf("async function startBot()");
+const start = source.indexOf("async function startBot(");
 const end = source.indexOf("\nstartBot();", start);
 
-function startup(prepareYouTubeCookies) {
+function startup(prepareYouTubeCookies, { token = "synthetic-test-token" } = {}) {
   const logs = [];
   const errors = [];
   const exits = [];
@@ -15,48 +15,67 @@ function startup(prepareYouTubeCookies) {
   let ready;
   let cleared = false;
   let logins = 0;
+  let exitCode;
+  const intervals = [];
+  const client = {
+    isReady: () => false,
+    once: (event, callback) => { ready = callback; },
+    login: async () => { logins++; }
+  };
   const startBot = vm.runInNewContext(`${source.slice(start, end)}\nstartBot;`, {
     prepareYouTubeCookies,
     logYtdlpVersion: async () => {},
-    config: { token: "synthetic-test-token" },
-    client: {
-      isReady: () => false,
-      once: (event, callback) => { ready = callback; },
-      login: async () => { logins++; }
-    },
+    config: { token },
+    client,
     Events: { ClientReady: "clientReady" },
     setTimeout: callback => { warning = callback; return { unref() {} }; },
     clearTimeout: () => { cleared = true; },
-    console: { log: message => logs.push(message), error: message => errors.push(message) },
-    process: { exit: code => exits.push(code) }
+    console: { log: message => logs.push(message), warn: message => logs.push(message), error: message => errors.push(message) },
+    process: { env: { ...(token ? { DISCORD_TOKEN: token } : {}) }, exit: code => exits.push(code), set exitCode(value) { exitCode = value; } },
+    shuttingDown: false, startupReason: null,
+    setInterval: (callback, milliseconds) => { intervals.push({ callback, milliseconds }); return { unref() {} }; }
   });
-  return { startBot, logs, errors, exits, warn: () => warning(), ready: () => ready(), cleared: () => cleared, logins: () => logins };
+  return { startBot, client, logs, errors, exits, intervals, warn: () => warning(), ready: () => ready(), cleared: () => cleared, logins: () => logins, exitCode: () => exitCode };
 }
 
-test("startup distinguishes cookie preparation from Discord login and clears warning on ready", async () => {
-  let release;
-  const pending = new Promise(resolve => { release = resolve; });
-  const app = startup(() => pending);
+test("missing token is reported immediately and repeats at the injectable interval", { timeout: 10000 }, async () => {
+  let cookieChecks = 0;
+  const app = startup(async () => { cookieChecks++; }, { token: "" });
+  await app.startBot({ permanentErrorRepeatMs: 25 });
+  assert.equal(cookieChecks, 1);
+  assert.match(app.errors[0], /FATAL CONFIG: DISCORD_TOKEN is not set/);
+  assert.equal(app.intervals.length, 1);
+  assert.equal(app.intervals[0].milliseconds, 25);
+  app.intervals[0].callback();
+  assert.equal(app.errors.length, 2);
+  assert.equal(app.logins(), 0);
+});
+
+test("startup warns on cookie failure, continues to Discord login and clears slow-start warning on ready", { timeout: 10000 }, async () => {
+  const app = startup(async () => { throw Object.assign(new Error("synthetic-cookie-path"), { code: "ENOENT" }); });
   const running = app.startBot();
   app.warn();
   assert.match(app.errors[0], /YouTube cookie preparation/);
-  assert.equal(app.logins(), 0);
-  release();
   await running;
   assert.equal(app.logins(), 1);
-  assert.match(app.logs[1], /Connecting to Discord/);
+  assert.match(app.logs.join("\n"), /not readable; continuing without cookies/);
+  assert.ok(!app.logs.join("\n").includes("synthetic-cookie-path"));
+  assert.match(app.logs.join("\n"), /Connecting to Discord/);
   app.warn();
   assert.match(app.errors[1], /Discord login/);
   app.ready();
   assert.equal(app.cleared(), true);
 });
 
-test("startup errors identify the stage without printing error contents or secrets", async () => {
-  const app = startup(async () => { throw Object.assign(new Error("synthetic-secret-value"), { code: "ENOENT" }); });
-  await app.startBot();
-  assert.match(app.errors[0], /cookie preparation: ENOENT/);
+test("transient Discord login failure retries with injected backoff, logs safely and requests exit", { timeout: 10000 }, async () => {
+  const app = startup(async () => {});
+  let attempts = 0; const delays = [];
+  app.client.login = async () => { attempts++; throw Object.assign(new Error("synthetic-secret-value"), { code: "ENETUNREACH" }); };
+  await app.startBot({ sleep: async ms => { delays.push(ms); }, exit: code => app.exits.push(code) });
+  assert.equal(attempts, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+  assert.ok(app.errors.some(line => /Discord login failed after 3 attempts: ENETUNREACH/.test(line)));
   assert.ok(!app.errors.join("\n").includes("synthetic-secret-value"));
-  assert.equal(app.logins(), 0);
   assert.equal(app.cleared(), true);
   assert.deepEqual(app.exits, [1]);
 });

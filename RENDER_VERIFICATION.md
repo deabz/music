@@ -379,3 +379,73 @@ deployment validation. It is NOT fully live release-verified. Required remaining
 access is explicitly listed above and in README; no credentials should be pasted
 into chat. Run LIVE_TEST_CHECKLIST.md on the designated guild after configuring
 the bot securely, then validate the actual Render service and optional database.
+
+### Startup port-first regression follow-up (2026-11-15)
+
+The isolated startup subprocess tests exposed a real ordering defect. In the
+missing-token case, `startBot()` awaited the yt-dlp version probe before checking
+`config.token`, so the permanent configuration message did not appear until the
+probe returned. A hand reproduction with an empty temporary working directory,
+explicit minimal environment, and both child output streams attached from spawn
+captured the following (the generated temporary storage path is normalized):
+
+```text
+[+0.717s stdout] [persistence] Using JSON file: [temporary path].
+[+0.798s stdout] [startup] Environment: DISCORD_TOKEN=UNSET GUILD_ID=UNSET PORT=SET YOUTUBE_COOKIES_FILE=UNSET MUSIC_DASHBOARD_TOKEN=UNSET SUPABASE_URL=UNSET SUPABASE_SECRET_KEY=UNSET SPOTIFY_CLIENT_ID=UNSET SPOTIFY_CLIENT_SECRET=UNSET MUSIC_STATE_FILE=UNSET VOICE_CHANNEL_ID=UNSET VOICE_GUILD_ID=UNSET YTDLP_PROXY=UNSET NODE_ENV=SET
+[+0.822s stdout] [startup] HTTP listening on 0.0.0.0:52230
+[+5.206s stdout] [ytdlp] version 2026.10.26
+[+5.206s stderr] [startup] FATAL CONFIG: DISCORD_TOKEN is not set. Set it in the Render dashboard (Environment) and redeploy.
+[+5.206s stdout] [startup] Preparing YouTube cookies (if configured).
+[+10.020s exit] code=null signal=SIGTERM
+```
+
+The child was logging correctly to stderr and the harness attached both streams
+before output; this was cause (a), a production ordering bug. Cookie validation
+now runs before yt-dlp, reports an unreadable configured file, and the missing
+token check immediately logs the repeated permanent-configuration diagnostic
+without starting yt-dlp. `/health` returns HTTP 503 with
+`{"status":"misconfigured","reason":"missing_token"}` after that check;
+`/healthz` returns 503. Before initialization, `/health` returns 200 `starting`.
+The repeat interval is injectable in unit tests and remains 60 seconds in
+production. Empty or invalid `PORT` values log their fallback and use 3000.
+
+Verification on this Windows working copy:
+
+* `node --test --test-timeout=10000 test/startup-subprocess.test.js`: PASS, four
+  isolated child-process cases (missing token, missing cookie file, invalid
+  port, unset port); each uses a temporary cwd, minimal explicit environment,
+  captures stdout and stderr from spawn, makes a real IPv4 HTTP request, and
+  confirms child termination during cleanup.
+* `node --test --test-timeout=10000 test/startup.test.js`:
+  PASS, 7 tests.
+* `npm test` (Node test files run serially so unrelated worker load cannot make
+  the strict 3-second child-port assertion flaky): PASS, 253 tests, zero
+  failures or skips.
+* `npm run check`: PASS, UTF-8/source syntax checks.
+* `git diff --check`: PASS.
+* `test/storage.test.js` changes only adapt its source-slice harness because
+  `startupComplete` moved to the file top: the slice begins at
+  `musicSaveTimer`, and the sandbox supplies the existing `shuttingDown` and
+  `shutdownPromise` globals. No storage assertion changed or weakened; failed
+  loads still cannot overwrite saved data, and corrupt JSON remains untouched
+  with writes disabled.
+
+The checked-in Dockerfile remains a Node 22 Debian slim image with Python,
+`tini`, production `npm ci`, and the Node start command; `.dockerignore` excludes
+local secrets and data; `render.yaml` uses Docker and `/health`. Docker is not
+installed in this environment, so a fresh image build was not run for this
+follow-up. The earlier hosted Linux/Docker evidence above concerns the prior
+verified commit and is not claimed as a build of this startup change.
+
+Release gates for this follow-up: the local working tree still requires a
+commit before it can be considered clean. The configured `origin` is
+`https://github.com/deabz/music.git`; repository visibility must be checked with
+`gh` before any publication. Live Render and Discord checks remain pending.
+
+After the follow-up tests, `npm run scan:secrets` passed over the working tree
+and 131 commits (zero unreviewed findings; protected paths absent). `gh repo
+view deabz/music --json visibility` returned `PUBLIC`, so the publication gate
+fails and no merge or push is permitted. Docker CLI is unavailable and `wsl
+--list --quiet` returned access denied, so this follow-up has no fresh Linux or
+Docker execution evidence. The local Dockerfile/Render configuration review
+passed statically. Live Render deployment and Discord remain pending.

@@ -182,7 +182,7 @@ test("corrupt JSON state is left untouched and writes stay disabled", async () =
 
 test("shutdown waits for queued save, flushes latest state, then disconnects", async () => {
   const source = await fs.readFile(require.resolve("../src/index"), "utf8");
-  const start = source.indexOf("let startupComplete =");
+  const start = source.indexOf("let musicSaveTimer =");
   const end = source.indexOf("\nclass GuildMusic", start);
   const shutdownStart = source.indexOf("async function shutdown(");
   const shutdownEnd = source.indexOf('\nprocess.on("SIGINT"', shutdownStart);
@@ -192,7 +192,7 @@ test("shutdown waits for queued save, flushes latest state, then disconnects", a
   const pending = new Promise(resolve => { release = resolve; });
   const storage = { loadAll: async () => ({}), saveGuilds: async () => { operations.push("save"); if (operations.length === 1) await pending; } };
   const api = vm.runInNewContext(`${source.slice(start, end)}\n${source.slice(shutdownStart, shutdownEnd)}\n({ loadMusicState, scheduleMusicSave, shutdown });`, {
-    storage, favourites: { flush: async () => {} }, music: new Map(), console: { error() {} },
+    storage, favourites: { flush: async () => {} }, music: new Map(), shuttingDown: false, shutdownPromise: null, console: { error() {} },
     setTimeout: callback => { scheduled = callback; return { unref() {} }; }, clearTimeout() {},
     healthServer: { close() {} },
     client: { destroy: () => operations.push("disconnect") }, process: { exit: () => operations.push("exit") }

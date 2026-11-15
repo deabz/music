@@ -1,3 +1,32 @@
+const startupHttp = require("node:http");
+const rawPort = process.env.PORT;
+const parsedPort = rawPort === undefined || rawPort.trim() === "" ? 3000 : Number(rawPort);
+const startupPort = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535 ? parsedPort : 3000;
+let startupReason = null;
+let startupComplete = false;
+const earlyHealthHandler = (request, response) => {
+  const path = new URL(request.url || "/", "http://localhost").pathname;
+  if (path === "/health") {
+    const status = startupReason ? 503 : 200;
+    response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    response.end(JSON.stringify(startupReason ? { status: "misconfigured", reason: startupReason } : { status: "starting" }));
+    return;
+  }
+  if (path === "/healthz" || path === "/api/health") {
+    const status = startupReason ? 503 : startupComplete ? 200 : 503;
+    response.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+    response.end(JSON.stringify(startupReason ? { status: "misconfigured", reason: startupReason } : { status: startupComplete ? "online" : "offline", bot: startupComplete ? "online" : "offline" }));
+    return;
+  }
+  // The full website handler below serves the other routes.
+};
+const httpServer = startupHttp.createServer(earlyHealthHandler);
+httpServer.on("error", error => { console.error(`[fatal] HTTP listener failed: ${error.code || error.name}`); process.exitCode = 1; });
+httpServer.listen(startupPort, "0.0.0.0", () => console.log(`[startup] HTTP listening on 0.0.0.0:${startupPort}`));
+if (rawPort === undefined || rawPort.trim() === "") console.warn("[startup] PORT is unset; using 3000.");
+else if (startupPort === 3000 && rawPort !== "3000") console.warn("[startup] PORT is invalid; using 3000.");
+process.on("exit", code => console.log(`[fatal] Process exiting with code ${code}.`));
+
 require("dotenv").config();
 
 const { createLyricsController } = require("./lyrics-controller");
@@ -56,9 +85,6 @@ const {
 } = require("@discordjs/voice");
 
 const required = ["DISCORD_TOKEN"];
-for (const key of required) {
-  if (!process.env[key]) throw new Error(`Missing required environment variable: ${key}`);
-}
 
 const numberEnv = (key, fallback, minimum, maximum) => {
   const value = Number(process.env[key] ?? fallback);
@@ -77,7 +103,7 @@ const config = {
   voiceChannelId: process.env.VOICE_CHANNEL_ID || "",
   voiceGuildId: process.env.VOICE_GUILD_ID || process.env.GUILD_ID || "",
   autoJoin: process.env.AUTO_JOIN_VOICE !== "false",
-  port: numberEnv("PORT", 3000, 1, 65535),
+  port: startupPort,
   defaultVolume: numberEnv("DEFAULT_VOLUME", 80, 0, 200),
   dashboardToken: process.env.MUSIC_DASHBOARD_TOKEN || "",
   leaveOnEmpty: process.env.LEAVE_ON_EMPTY === "true",
@@ -87,7 +113,7 @@ const config = {
 const { playbackPosition } = require("./playback-position");
 const { createMentionHandler } = require("./mentions");
 const startedAt = Date.now();
-let startupComplete = false;
+startupComplete = false;
 let shuttingDown = false;
 let shutdownPromise = null;
 let musicSaveTimer = null;
@@ -1543,7 +1569,7 @@ async function controlDashboard(payload) {
   return dashboardGuildSnapshot(guild);
 }
 
-const healthServer = createHealthServer({
+const appHealthServer = createHealthServer({
   page: healthPage,
   dashboardPage,
   dashboardToken: config.dashboardToken,
@@ -1575,7 +1601,14 @@ const healthServer = createHealthServer({
       } : null
     };
   }
-}).listen(config.port, () => console.log(`Health website listening on :${config.port}/health`));
+});
+for (const listener of appHealthServer.listeners("request")) httpServer.on("request", (request, response) => {
+  const pathname = new URL(request.url || "/", "http://localhost").pathname;
+  if (pathname === "/health" || pathname === "/healthz" || pathname === "/api/health") return;
+  listener(request, response);
+});
+appHealthServer.removeAllListeners("request");
+const healthServer = httpServer;
 
 async function shutdown(exitCode = 0) {
   if (shutdownPromise) return shutdownPromise;
@@ -1653,7 +1686,11 @@ client.on(Events.Debug, message => {
   }
 });
 
-async function startBot() {
+async function startBot({ sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
+  exit = code => { console.error(`[fatal] Exiting with code ${code}.`); process.exit(code); },
+  retryDelays = [1000, 2000], permanentErrorRepeatMs = 60000, scheduleInterval = setInterval } = {}) {
+  const envNames = ["DISCORD_TOKEN", "GUILD_ID", "PORT", "YOUTUBE_COOKIES_FILE", "MUSIC_DASHBOARD_TOKEN", "SUPABASE_URL", "SUPABASE_SECRET_KEY", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET", "MUSIC_STATE_FILE", "VOICE_CHANNEL_ID", "VOICE_GUILD_ID", "YTDLP_PROXY", "NODE_ENV"];
+  console.log(`[startup] Environment: ${envNames.map(key => `${key}=${process.env[key] ? "SET" : "UNSET"}`).join(" ")}`);
   let phase = "YouTube cookie preparation";
   const startupTimer = setTimeout(() => {
     console.error(`[startup] Still waiting for ${phase} after 30 seconds. Discord ready: ${client.isReady()}.`);
@@ -1661,16 +1698,39 @@ async function startBot() {
   startupTimer.unref();
   client.once(Events.ClientReady, () => clearTimeout(startupTimer));
   try {
-    await logYtdlpVersion();
     console.log("[startup] Preparing YouTube cookies (if configured).");
-    await prepareYouTubeCookies();
+    try { await prepareYouTubeCookies(); }
+    catch { console.warn("[startup] YOUTUBE_COOKIES_FILE is set but not readable; continuing without cookies"); }
+    if (!config.token) {
+      startupReason = "missing_token";
+      const report = () => console.error("[startup] FATAL CONFIG: DISCORD_TOKEN is not set. Set it in the Render dashboard (Environment) and redeploy.");
+      report(); scheduleInterval(report, permanentErrorRepeatMs).unref?.(); clearTimeout(startupTimer); return;
+    }
+    await logYtdlpVersion();
+    await logYtdlpVersion();
     phase = "Discord login";
     console.log("[startup] Cookie preparation complete. Connecting to Discord.");
-    await client.login(config.token);
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try { await client.login(config.token); lastError = null; break; }
+      catch (error) { lastError = error; if (attempt <= retryDelays.length) await sleep(retryDelays[attempt - 1]); }
+    }
+    if (lastError) {
+      const code = lastError.code || lastError.name;
+      if (["TokenInvalid", "DisallowedIntents", "PrivilegedIntentsRequired", 4014].includes(code) || /invalid token|disallowed intent/i.test(lastError.message || "")) {
+        startupReason = code === "TokenInvalid" || /invalid token/i.test(lastError.message || "") ? "invalid_token" : "disallowed_intents";
+        console.error(`[startup] FATAL CONFIG: Discord rejected configuration (${startupReason}). Check the bot token and Developer Portal intents.`);
+        setInterval(() => console.error(`[startup] FATAL CONFIG: Discord configuration remains invalid (${startupReason}).`), 60000).unref(); return;
+      }
+      console.error(`[startup] Discord login failed after 3 attempts: ${code}`);
+      clearTimeout(startupTimer);
+      exit(1); return;
+    }
   } catch (error) {
     clearTimeout(startupTimer);
     console.error(`[startup] Failed during ${phase}: ${error.code || error.name}`);
-    process.exit(1);
+    console.error(`[fatal] Startup failed during ${phase}: ${error.code || error.name}`);
+    exit(1);
   }
 }
 
