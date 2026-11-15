@@ -7,6 +7,7 @@ const { youtubeCookieOptions, youtubeRuntimeOptions, formatYtdlpTime } = require
 
 // Backpressure bounds the unread output; child pipes have small additional buffers.
 const PREFETCH_BYTES = 2 * 1024 * 1024;
+let pipelineSequence = 0;
 function terminateChild(child, platform = process.platform, launch = spawn, killGroup = process.kill) {
   if (child.pipelineClosed) return;
   if (Number.isInteger(child.pid) && platform === "win32") {
@@ -22,10 +23,12 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
 }
 function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, probe = demuxProbe) {
   const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES,
-    transform(chunk, encoding, callback) { job.resolveAudioReady?.(); callback(null, chunk); } });
+    transform(chunk, encoding, callback) {
+      job.audioStarted = true; clearTimeout(job.startupTimer); job.resolveAudioReady?.(); callback(null, chunk);
+    } });
   const job = { stream, stderr: "", filterStderr: "", cancelled: false, intentionallyAborted: false, error: null, downloadDone: false, outputDone: false,
     inputType: null, formatReady: false, rate: filters.nightcore ? 1.323 : 1, children: [],
-    filters: { ...filters }, offset, exits: {}, commands: [], diagnosticSecrets: [] };
+    filters: { ...filters }, offset, exits: {}, commands: [], diagnosticSecrets: [], generationId: ++pipelineSequence, stage: "extract" };
   job.ready = new Promise(resolve => { job.resolveReady = resolve; });
   job.audioReady = new Promise(resolve => { job.resolveAudioReady = resolve; });
   job.sourceStreams = new Set();
@@ -53,6 +56,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     if (job.cancelled) return;
     job.intentionallyAborted = reason === "intentional" && !job.error;
     job.cancelled = true;
+    clearTimeout(job.startupTimer);
     for (const child of job.children) {
       terminateChild(child);
       child.stdin?.destroy();
@@ -65,8 +69,13 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     job.resolveAudioReady();
   };
   const finish = () => {
-    if (job.sourceEnded && job.children.every(child => child.pipelineClosed) && !job.error && !job.cancelled) stream.end();
+    if (job.sourceEnded && job.children.every(child => child.pipelineClosed) && !job.error && !job.cancelled) {
+      if (!job.audioStarted && !job.ignoredPipe) fail(new Error("Pipeline ended without delivering audio."), job.stage);
+      else stream.end();
+    }
   };
+  job.startupTimer = setTimeout(() => fail(new Error("Audio startup timed out."), job.stage), 30000);
+  job.startupTimer.unref?.();
   job.finish = finish;
   const output = source => {
     source.on("end", () => { job.sourceEnded = true; finish(); });
@@ -88,6 +97,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       job.exits[stage] = { code, signal: signal || null };
       if (downloader) job.downloadDone = true;
       if (code !== 0) fail(new Error(detail.trim() || `${label} exited with code ${code}.`), stage);
+      if (job.error) job.onDiagnostic?.(job.error);
       finish();
     });
     return child;
@@ -103,6 +113,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     const download = watch(launch(ytdlp.constants.YOUTUBE_DL_PATH,
       [...ytdlp.args(options), "--", track.url], { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] }), "yt-dlp", true);
     job.download = download;
+    job.stage = "probe";
     // Probe at most a small prefix of this same download, preserving its bytes.
     // Only validated Discord-compatible WebM Opus uses the fast path.
     Promise.resolve(probe(download.stdout, 8192)).then(({ stream: source, type }) => {
@@ -115,7 +126,8 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       if (filters.nightcore) effects.push("asetrate=44100*1.2,atempo=1.2");
       if (filters.echo) effects.push("aecho=0.8:0.88:60:0.4");
       if (effects.length || type !== StreamType.WebmOpus) {
-        const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+        job.stage = "ffmpeg";
+        const args = ["-hide_banner", "-nostdin", "-loglevel", "error", "-i", "pipe:0",
           ...(effects.length ? ["-af", effects.join(",")] : []),
           "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"];
         job.commands.push({ stage: "ffmpeg", executable: ffmpeg, args });

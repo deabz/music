@@ -76,7 +76,7 @@ class TransitionController {
     const endStart = state.current.duration - lengths.fadeOut;
     const inWindow = (this.fadeIn && position < lengths.fadeIn) || position >= endStart;
     const delay = inWindow ? TRANSITION_TICK_MS : Math.max(1, (endStart - position) / (state.resourcePlaybackRate || 1) * 1000);
-    this.timer = this.setTimer(() => this.refresh(), delay);
+    this.timer = this.setTimer(() => { if (this.resource === resource) this.refresh(); }, delay);
     this.timer?.unref?.();
   }
 }
