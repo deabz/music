@@ -6,8 +6,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/storage.js && node --check src/commands.js && node --check src/music-utils.js && node --check src/health-page.js && node --check src/dashboard-page.js && node --check src/health-server.js",
-    "test": "node --test"
+    "check": "node --check src/index.js && node --check src/storage.js && node --check src/commands.js && node --check src/music-utils.js && node --check src/health-page.js && node --check src/dashboard-page.js && node --check src/health-server.js && node --check src/mentions.js && node --check src/playback-position.js && node --check src/status-page.js && node --check src/site-motion.js",
+    "test": "node --test",
+    "test:website": "node scripts/website-check.cjs"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -21,5 +22,8 @@
     "opusscript": "^0.0.8",
     "play-dl": "^1.9.7",
     "youtube-dl-exec": "^3.1.15"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.0"
   }
 }

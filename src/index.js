@@ -13,9 +13,7 @@ const {
   buildStatsEmbed,
   formatDuration,
   QUEUE_PAGE_SIZE,
-  commandAliases,
   commands,
-  parsePrefixCommand,
   requesterLabel
 } = require("./commands");
 const { createHealthServer } = require("./health-server");
@@ -71,6 +69,8 @@ const config = {
   emptyTimeout: numberEnv("EMPTY_CHANNEL_TIMEOUT_SECONDS", 300, 5, 86400) * 1000,
   maxQueueSize: numberEnv("MAX_QUEUE_SIZE", 2000, 1, 2000)
 };
+const { playbackPosition } = require("./playback-position");
+const { createMentionHandler } = require("./mentions");
 const startedAt = Date.now();
 let musicSaveTimer = null;
 let musicSaveChain = Promise.resolve();
@@ -82,7 +82,7 @@ function musicSnapshot(state) {
     voiceChannelId: state.connection?.joinConfig.channelId || state.savedVoiceChannelId || null,
     current: state.current,
     positionSeconds: state.current
-      ? state.resumeOffsetSeconds + (state.resource?.playbackDuration || 0) / 1000
+      ? playbackPosition(state)
       : 0,
     paused: state.player.state.status === AudioPlayerStatus.Paused || state.pauseOnRestore,
     queue: state.queue,
@@ -166,7 +166,7 @@ class GuildMusic {
     this.audioFilters[filter] = enabled;
     if (this.playing && this.current) {
       // Capture current position before restarting
-      const currentPos = this.resumeOffsetSeconds + (this.resource?.playbackDuration || 0) / 1000;
+      const currentPos = playbackPosition(this);
       const wasPaused = this.player.state.status === AudioPlayerStatus.Paused;
       this.resumeOffsetSeconds = currentPos;
       this.pauseOnRestore = wasPaused;
@@ -342,11 +342,7 @@ class GuildMusic {
     if (!next.autoSuggested) this.autoplayTriedUrls.clear();
     this.current = next;
 
-    // CRITICAL FIX: Only set resumeOffsetSeconds from the track if we are NOT restarting the same track
-    // (e.g., when called from setAudioFilter or /forward, we've already updated this.resumeOffsetSeconds)
-    if (endedTrack !== null || !this.resumeOffsetSeconds) {
-      this.resumeOffsetSeconds = Number.isFinite(next.resumeAtSeconds) ? next.resumeAtSeconds : 0;
-    }
+    this.resumeOffsetSeconds = Number.isFinite(next.resumeAtSeconds) ? next.resumeAtSeconds : 0;
     delete next.resumeAtSeconds;
     this.playing = true;
     updatePresence();
@@ -448,6 +444,7 @@ class GuildMusic {
         inlineVolume: true
       });
       this.resource = resource;
+      this.resourcePlaybackRate = this.audioFilters.nightcore ? (44100 * 1.2 / 48000) * 1.2 : 1;
       resource.volume.setVolume(this.volume / 100);
       console.log(`[stream:${this.guild.id}] Starting ${next.title}`);
       this.player.play(resource);
@@ -559,8 +556,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildMessages
   ]
 });
 const music = new Collection();
@@ -573,7 +569,7 @@ function updatePresence() {
   const active = [...music.values()].find(state => state.playing && state.current);
   const activity = active
     ? active.current.title.slice(0, 128)
-    : ".play";
+    : "/play";
   client.user.setPresence({
     status: "dnd",
     activities: [{ name: activity, type: ActivityType.Listening }]
@@ -618,13 +614,8 @@ async function replyWithQueue(context, state) {
     allowedMentions: { parse: [] }
   });
 
-  let message;
-  if (context.isPrefixCommand) {
-    message = await context.reply(queuePayload());
-  } else {
-    await context.reply(queuePayload());
-    message = await context.fetchReply();
-  }
+  await context.reply(queuePayload());
+  const message = await context.fetchReply();
   const collector = message.createMessageComponentCollector({
     time: 120_000,
     filter: component => component.customId === "queue:previous" || component.customId === "queue:next"
@@ -632,7 +623,7 @@ async function replyWithQueue(context, state) {
 
   collector.on("collect", async component => {
     if (component.user.id !== context.user.id) {
-      await component.reply({ content: "Run `.q` yourself to control these pages.", ephemeral: true });
+      await component.reply({ content: "Run `/queue` yourself to control these pages.", ephemeral: true });
       return;
     }
     page += component.customId === "queue:next" ? 1 : -1;
@@ -657,7 +648,7 @@ function liveNowPlayingEmbed(state, options, track = state.current) {
     : playerStatus;
   return buildNowPlayingEmbed({
     track,
-    elapsedSeconds: Math.floor(state.resumeOffsetSeconds + (state.resource?.playbackDuration || 0) / 1000),
+    elapsedSeconds: Math.floor(playbackPosition(state)),
     status: playbackStatus,
     ...options
   });
@@ -703,16 +694,9 @@ async function postLiveNowPlaying(context, state, options = {}) {
 
   if (!state.current) return context.reply("Nothing is playing.");
   const payload = { embeds: [liveNowPlayingEmbed(state, liveOptions, startingTrack)] };
-  let message;
-  if (context.isPrefixCommand) {
-    message = context.deferred
-      ? await context.editReply(payload)
-      : await context.reply(payload);
-  } else {
-    if (context.deferred) await context.editReply(payload);
-    else await context.reply(payload);
-    message = await context.fetchReply();
-  }
+  if (context.deferred) await context.editReply(payload);
+  else await context.reply(payload);
+  const message = await context.fetchReply();
 
   const entry = { message, state, options: liveOptions, timer: null };
   liveNowPlaying.set(channelId, entry);
@@ -1004,19 +988,7 @@ const handleCommand = async interaction => {
       return interaction.editReply("Searching for tracks... I'll let you know when they're added!");
     }
     if (interaction.commandName === "set-notification-channel") {
-      let channel;
-      if (interaction.isPrefixCommand || interaction.options === undefined || typeof interaction.options.getChannel !== "function") {
-        let channelId = interaction.options?.getString("channel");
-        if (!channelId) return reply(interaction, "Please provide a channel ID or mention a channel.");
-
-        // Handle mentions like <#1234567890>
-        const mentionMatch = channelId.match(/<#(\d+)>/);
-        if (mentionMatch) channelId = mentionMatch[1];
-
-        channel = interaction.guild.channels.cache.get(channelId) || await interaction.guild.channels.fetch(channelId).catch(() => null);
-      } else {
-        channel = interaction.options.getChannel("channel", true);
-      }
+      const channel = interaction.options.getChannel("channel", true);
 
       if (!channel) return reply(interaction, "Invalid channel provided.");
       if (!channel.permissionsFor(interaction.guild.members.me).has(PermissionFlagsBits.SendMessages)) {
@@ -1061,7 +1033,7 @@ const handleCommand = async interaction => {
       if (!Number.isSafeInteger(seconds) || seconds <= 0) {
         return reply(interaction, "Enter a positive number of seconds or m:ss, for example 10 or 1:30.");
       }
-      const position = state.resumeOffsetSeconds + (state.resource?.playbackDuration || 0) / 1000;
+      const position = playbackPosition(state);
       await interaction.deferReply();
       await state.seek(position + seconds);
       return interaction.editReply(`Forwarded to ${formatDuration(state.resumeOffsetSeconds)}.`);
@@ -1244,104 +1216,7 @@ client.on(Events.InteractionCreate, async interaction => {
   await handleCommand(interaction);
 });
 
-client.on(Events.MessageCreate, async message => {
-  if (!message.guild || !message.member || message.author.bot) return;
-  const parsed = parsePrefixCommand(message.content);
-  if (!parsed) return;
-
-  const command = commands.find(item => item.name === parsed.name);
-  if (!command) return;
-  if (parsed.name === "247" && !message.member?.permissions.has(PermissionFlagsBits.ManageGuild)) {
-    await message.reply({
-      content: "You need the Manage Server permission to use this command.",
-      allowedMentions: { repliedUser: false }
-    });
-    return;
-  }
-
-  const options = command.options || [];
-  const argument = parsed.args;
-  const positions = argument.split(/\s+/);
-  const sendMessage = content => message.reply({
-    content,
-    allowedMentions: { repliedUser: false }
-  });
-
-  if (options.some(option => option.required) && !argument) {
-    await sendMessage(`Usage: \`.${parsed.name} ${options.map(option => `<${option.name}>`).join(" ")}\``);
-    return;
-  }
-  if (parsed.name === "volume" && !/^(?:[0-9]|[1-9][0-9]|1[0-9]{2}|200)$/.test(argument)) {
-    await sendMessage("Volume must be a whole number from 0 to 200. Example: `.volume 80`.");
-    return;
-  }
-  if (["remove", "move"].includes(parsed.name)
-    && (positions.length !== (parsed.name === "move" ? 2 : 1)
-      || positions.some(value => !/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1))) {
-    await sendMessage(parsed.name === "move" ? "Usage: `.move <from> <to>` (positive integers)." : "Usage: `.remove <position>` (a positive integer).");
-    return;
-  }
-  if (parsed.name === "loop" && !["off", "track", "queue"].includes(argument.toLowerCase())) {
-    await sendMessage("Repeat mode must be `off`, `track`, or `queue`. Example: `.loop queue`.");
-    return;
-  }
-  if (parsed.name === "help" && argument && !["all", "guide", "playback", "queue", "voice", "settings"].includes(argument.toLowerCase())) {
-    await sendMessage("Choose a help category: `all`, `guide`, `playback`, `queue`, `voice`, or `settings`.");
-    return;
-  }
-  if (!options.length && argument) {
-    await sendMessage(`This command takes no arguments. Use \`.${parsed.name}\`.`);
-    return;
-  }
-
-  let deferredMessage = null;
-  const prefixContext = {
-    isPrefixCommand: true,
-    commandName: parsed.name,
-    channel: message.channel,
-    guild: message.guild,
-    member: message.member,
-    user: message.author,
-    deferred: false,
-    options: {
-      getString(name) {
-        if (name === "query" && ["play", "search"].includes(parsed.name)) return argument;
-        if (name === "time" && parsed.name === "forward") return argument || null;
-        if (name === "category" && parsed.name === "help") return argument.toLowerCase() || null;
-        if (name === "mode" && parsed.name === "loop") return argument.toLowerCase();
-        if (name === "channel" && parsed.name === "set-notification-channel") return argument;
-        return null;
-      },
-      getInteger(name) {
-        if (name === "position" && parsed.name === "remove") return Number(argument);
-        if (parsed.name === "move" && ["from", "to"].includes(name)) return Number(positions[name === "from" ? 0 : 1]);
-        return name === "percent" && parsed.name === "volume" ? Number(argument) : null;
-      }
-    },
-    async reply(payload) {
-      const messageOptions = typeof payload === "string" ? { content: payload } : { ...payload };
-      delete messageOptions.flags;
-      return message.reply({
-        ...messageOptions,
-        allowedMentions: { ...messageOptions.allowedMentions, parse: [], repliedUser: false }
-      });
-    },
-    async deferReply() {
-      this.deferred = true;
-      // Prefix commands are not Discord interactions; sending a reply to the
-      // invoking message fails if it was deleted while the command ran.
-      deferredMessage = await message.channel.send({
-        content: "Working on your request.",
-        allowedMentions: { repliedUser: false }
-      });
-    },
-    async editReply(content) {
-      return deferredMessage.edit(content);
-    }
-  };
-
-  await handleCommand(prefixContext);
-});
+client.on(Events.MessageCreate, createMentionHandler(() => client.user?.id));
 
 function dashboardError(message, statusCode = 400) {
   const error = new Error(message);
@@ -1360,7 +1235,7 @@ function dashboardGuildSnapshot(guild) {
     return member?.displayName || member?.user.username || "Discord user";
   };
   const positionSeconds = current
-    ? Math.floor(state.resumeOffsetSeconds + (state.resource?.playbackDuration || 0) / 1000)
+    ? Math.floor(playbackPosition(state))
     : 0;
   const channelId = state?.connection?.joinConfig.channelId || null;
   return {
@@ -1378,8 +1253,9 @@ function dashboardGuildSnapshot(guild) {
       thumbnail: current.thumbnail || null,
       durationSeconds: current.duration,
       positionSeconds,
+      playbackRate: state.resourcePlaybackRate || 1,
       requestedBy: dashboardRequesterLabel(current),
-      status: state.player.state.status === AudioPlayerStatus.Paused ? "paused" : "playing"
+      status: state.player.state.status === AudioPlayerStatus.AutoPaused ? "paused" : state.player.state.status
     } : null,
     queue: state?.queue.map(track => ({
       title: track.title,
@@ -1489,14 +1365,17 @@ createHealthServer({
     const track = active?.current;
     return {
       ready,
+      uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+      pingMs: client.ws.ping,
       serverCount: ready ? client.guilds.cache.size : 0,
       track: track ? {
         title: track.title,
         artist: track.author,
         thumbnail: track.thumbnail || null,
-        positionSeconds: Math.floor(active.resumeOffsetSeconds + (active.resource?.playbackDuration || 0) / 1000),
+        positionSeconds: Math.floor(playbackPosition(active)),
         durationSeconds: track.duration || null,
-        status: active.player.state.status === AudioPlayerStatus.Paused ? "paused" : "playing",
+        playbackRate: active.resourcePlaybackRate || 1,
+        status: active.player.state.status === AudioPlayerStatus.AutoPaused ? "paused" : active.player.state.status,
         server: active.guild.name
       } : null
     };

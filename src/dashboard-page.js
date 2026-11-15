@@ -73,7 +73,7 @@ const dashboardPage = `<!doctype html>
 <body>
   <header class="shell">
     <a class="brand" href="/">nyx<span>.</span></a>
-    <nav><a href="/">Home</a><a href="/api/health">Public status</a></nav>
+    <nav><a href="/">Home</a><a href="/status">Public status</a></nav>
   </header>
   <main class="shell">
     <h1>Music controls</h1>
@@ -136,7 +136,14 @@ const dashboardPage = `<!doctype html>
       const value = Math.max(0, Math.floor(Number(seconds) || 0));
       return Math.floor(value / 60) + ":" + String(value % 60).padStart(2, "0");
     };
-    let token = sessionStorage.getItem("nyx-dashboard-token") || "";
+    const tokenStore = {
+      get() { try { return sessionStorage.getItem("nyx-dashboard-token") || ""; } catch { return ""; } },
+      set(value) { try { sessionStorage.setItem("nyx-dashboard-token", value); } catch {} },
+      clear() { try { sessionStorage.removeItem("nyx-dashboard-token"); } catch {} }
+    };
+    let token = tokenStore.get();
+    let refreshing = false;
+    let receivedAt = 0;
     let snapshot = null;
     let refreshTimer = null;
     let busy = false;
@@ -153,14 +160,26 @@ const dashboardPage = `<!doctype html>
       const response = await fetch(path, {
         ...options,
         cache: "no-store",
+        signal: AbortSignal.timeout(10000),
         headers: { Authorization: "Bearer " + token, ...(options.body ? { "Content-Type": "application/json" } : {}), ...options.headers }
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Dashboard request failed (" + response.status + ").");
+      if (!response.ok) {
+        if (response.status === 401 || response.status === 429) {
+          tokenStore.clear(); token = ""; snapshot = null;
+          byId("login").hidden = false; byId("controls").hidden = true;
+          byId("login").classList.remove("shake");
+          requestAnimationFrame(() => byId("login").classList.add("shake"));
+        }
+        throw new Error(data.error || "Dashboard request failed (" + response.status + ").");
+      }
       return data;
     }
     function renderQueue(items) {
       const root = byId("queue");
+      const signature = JSON.stringify(items);
+      if (root.dataset.signature === signature) return;
+      root.dataset.signature = signature;
       root.replaceChildren();
       byId("queue-count").textContent = "(" + items.length + ")";
       if (!items.length) {
@@ -173,6 +192,7 @@ const dashboardPage = `<!doctype html>
       items.forEach((track, index) => {
         const item = document.createElement("div");
         item.className = "queue-item";
+        item.style.setProperty("--queue-index", index);
         const copy = document.createElement("div");
         copy.className = "queue-copy";
         const title = document.createElement("strong");
@@ -190,7 +210,12 @@ const dashboardPage = `<!doctype html>
         down.addEventListener("click", () => runAction("move", { from: index, to: index + 1 }, "Moved song down."));
         const remove = document.createElement("button");
         remove.type = "button"; remove.textContent = "×"; remove.title = "Remove song"; remove.className = "danger";
-        remove.addEventListener("click", () => runAction("remove", { position: index }, "Removed song."));
+        remove.addEventListener("click", async () => {
+          item.classList.add("leaving");
+          await new Promise(resolve => setTimeout(resolve, 180));
+          await runAction("remove", { position: index }, "Removed song.");
+          item.classList.remove("leaving");
+        });
         actions.append(up, down, remove);
         item.append(copy, actions);
         root.append(item);
@@ -198,6 +223,7 @@ const dashboardPage = `<!doctype html>
     }
     function renderGuild(data) {
       snapshot = data;
+      receivedAt = Date.now();
       const current = data.current;
       byId("current-title").textContent = current ? current.title : "Nothing is playing";
       byId("current-artist").textContent = current ? (current.artist || "Unknown artist") : (data.connected ? "The bot is connected and ready." : "Connect to a voice channel to start.");
@@ -247,9 +273,15 @@ const dashboardPage = `<!doctype html>
       renderQueue(data.queue);
     }
     async function refresh() {
-      if (!token || busy) return;
+      if (!token || busy || refreshing || document.hidden) return;
+      refreshing = true;
+      const requestToken = token;
+      byId("login").classList.add("loading");
+      byId("login").setAttribute("aria-busy", "true");
+      byId("login-form").querySelector("button").disabled = true;
       try {
         const data = await api("/api/dashboard");
+        if (token !== requestToken) return;
         const guildSelect = byId("guild");
         const selected = guildSelect.value;
         guildSelect.replaceChildren();
@@ -263,14 +295,20 @@ const dashboardPage = `<!doctype html>
         renderGuild(data.guilds.find(guild => guild.id === guildSelect.value));
         byId("login").hidden = true;
         byId("controls").hidden = false;
+        byId("token").value = "";
       } catch (error) {
         if (/token|access/i.test(error.message)) {
-          sessionStorage.removeItem("nyx-dashboard-token");
+          tokenStore.clear();
           token = "";
           byId("login").hidden = false;
           byId("controls").hidden = true;
         }
         notice(error.message, true);
+      } finally {
+        refreshing = false;
+        byId("login").classList.remove("loading");
+        byId("login").removeAttribute("aria-busy");
+        byId("login-form").querySelector("button").disabled = false;
       }
     }
     async function runAction(action, values = {}, success = "Updated.") {
@@ -294,14 +332,15 @@ const dashboardPage = `<!doctype html>
     byId("login-form").addEventListener("submit", async event => {
       event.preventDefault();
       token = byId("token").value;
-      sessionStorage.setItem("nyx-dashboard-token", token);
+      byId("token").value = "";
+      tokenStore.set(token);
       notice("Checking access…");
       await refresh();
     });
     byId("guild").addEventListener("change", refresh);
     byId("refresh").addEventListener("click", refresh);
     byId("logout").addEventListener("click", () => {
-      sessionStorage.removeItem("nyx-dashboard-token");
+      tokenStore.clear();
       token = ""; snapshot = null;
       byId("controls").hidden = true; byId("login").hidden = false; byId("token").value = "";
       notice("Dashboard locked.");
@@ -325,10 +364,25 @@ const dashboardPage = `<!doctype html>
       byId("query").value = "";
     });
     if (token) {
-      byId("token").value = token;
       refresh();
     }
-    refreshTimer = setInterval(refresh, 5000);
+    function armRefresh() {
+      clearInterval(refreshTimer);
+      if (!document.hidden) refreshTimer = setInterval(() => {
+        const controls = byId("controls").getBoundingClientRect();
+        if (controls.bottom > 0 && controls.top < innerHeight) refresh();
+      }, 5000);
+    }
+    document.addEventListener("visibilitychange", armRefresh);
+    window.addEventListener("pagehide", () => clearInterval(refreshTimer));
+    armRefresh();
+    setInterval(() => {
+      const current = snapshot?.current;
+      if (document.hidden || !current || busy || document.activeElement === byId("seek")) return;
+      const position = Math.min(current.durationSeconds, current.positionSeconds + (current.status === "playing" ? (Date.now() - receivedAt) / 1000 * (current.playbackRate || 1) : 0));
+      byId("position").textContent = formatTime(position);
+      byId("seek").value = position;
+    }, 1000);
   </script>
 </body>
 </html>`;

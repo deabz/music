@@ -2,7 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const { commands, parsePrefixCommand, formatDuration } = require("../src/commands");
+const { commands, buildHelpEmbed, formatDuration } = require("../src/commands");
 const { AudioPlayerStatus } = require("@discordjs/voice");
 
 const source = fs.readFileSync(require.resolve("../src/index"), "utf8");
@@ -18,7 +18,7 @@ function eventHandler(event, overrides = {}) {
     client: { on: (_, callback) => { handler = callback; } },
     Events: { [event]: event },
     commands,
-    parsePrefixCommand,
+    playbackPosition: require("../src/playback-position").playbackPosition,
     AudioPlayerStatus,
     clearTimeout,
     ...overrides
@@ -33,6 +33,7 @@ function commandHandler(state, overrides = {}) {
     getMusic: () => state,
     reply: (interaction, content) => interaction.reply(content),
     formatDuration,
+    playbackPosition: require("../src/playback-position").playbackPosition,
     console: quietConsole,
     require,
     ...overrides
@@ -91,59 +92,34 @@ test("successful downloader completion advances once despite duplicate Idle even
   assert.equal(advanced, 1);
 });
 
-test("dot prefix parses commands and aliases case-insensitively", () => {
-  for (const [content, name, args] of [
-    [".play song", "play", "song"],
-    [".p song", "play", "song"],
-    [".q", "queue", ""],
-    [".PLAY song", "play", "song"]
-  ]) {
-    assert.deepEqual(parsePrefixCommand(content), { name, args });
-  }
-  for (const content of [".", "..", "...", "..ok", ".. hello", ". hello", "hello .play", "'play"]) {
-    assert.equal(parsePrefixCommand(content), null, content);
-  }
+test("messages only answer mentions, with per-channel cooldown and bot filtering", async () => {
+  const { createMentionHandler } = require("../src/mentions");
+  let time = 0;
+  const handler = createMentionHandler(() => "123", () => time);
+  const replies = [];
+  const message = content => ({ content, channelId: "one", guild: {}, author: { bot: false }, reply: async value => replies.push(value) });
+  for (const content of [".play song", ".p song", ".q", ".np", ".bb", ".8d", ".nc", ".ec", ".rm 1", "hello", "hi <@123>", "<@123>suffix"]) await handler(message(content));
+  assert.equal(replies.length, 0);
+  await handler(message("<@123>"));
+  await handler(message("<@!123> help"));
+  assert.equal(replies.length, 1);
+  await handler({ ...message("<@123>"), channelId: "two", author: { bot: true } });
+  assert.equal(replies.length, 1);
+  await handler({ ...message("<@123>"), channelId: "two" });
+  assert.equal(replies.length, 2);
+  time = 10001;
+  await handler(message("<@!123> help"));
+  assert.equal(replies.length, 3);
+  assert.match(replies[0].content, /slash commands/);
+  assert.ok(!source.includes("MessageContent"));
 });
 
-test("ordinary dot messages and unknown commands are silently ignored", async () => {
-  let dispatched = 0;
-  let replies = 0;
-  const handler = eventHandler("MessageCreate", { handleCommand: async () => { dispatched++; } });
-  for (const content of [".", "..", "...", "..ok", ".. hello", ". hello", ".unknown song", "hello .play"]) {
-    await handler({ content, guild: {}, member: {}, author: { bot: false }, reply: async () => { replies++; } });
-  }
-  assert.equal(dispatched, 0);
-  assert.equal(replies, 0);
-});
-
-test("prefix adapter passes remove, move, search, forward and normalized options", async () => {
-  let context;
-  const handler = eventHandler("MessageCreate", { handleCommand: async value => { context = value; } });
-  for (const [content, getter, option, expected] of [
-    [".rm 3", "getInteger", "position", 3],
-    [".mv 2   4", "getInteger", "from", 2],
-    [".move 2 4", "getInteger", "to", 4],
-    [".sr a song name", "getString", "query", "a song name"],
-    [".forward 1:30", "getString", "time", "1:30"],
-    [".forward", "getString", "time", null],
-    [".loop QUEUE", "getString", "mode", "queue"],
-    [".help PLAYBACK", "getString", "category", "playback"]
-  ]) {
-    await handler({ content, guild: {}, member: {}, author: { bot: false } });
-    assert.equal(context.options[getter](option), expected, content);
-  }
-});
-
-test("prefix queue positions reject missing, noninteger, nonpositive and extra arguments", async () => {
-  let dispatched = 0;
-  const handler = eventHandler("MessageCreate", { handleCommand: async () => { dispatched++; } });
-  for (const content of [".move 1", ".move 0 2", ".move 1.5 2", ".move 1 2 3", ".move one two", ".remove -1", ".remove 1.5", ".remove 1 2"]) {
-    let response;
-    await handler({ content, guild: {}, member: {}, author: { bot: false }, reply: async value => { response = value.content; } });
-    assert.match(response, /Usage:/, content);
-  }
-  assert.equal(dispatched, 0);
-  assert.ok(!commands.some(command => command.name === "playlist"));
+test("help covers every registered slash command once, within Discord field limits", () => {
+  const embed = buildHelpEmbed("all").toJSON();
+  assert.deepEqual(embed.fields.map(field => field.name), ["Playback", "Queue", "Audio effects", "Info"]);
+  for (const command of commands) assert.equal(embed.fields.flatMap(field => [...field.value.matchAll(/`\/([a-z0-9-]+)/g)].map(match => match[1])).filter(name => name === command.name).length, 1, command.name);
+  for (const field of embed.fields) assert.ok(field.value.length <= 1024, field.name);
+  assert.ok(!embed.description.includes("shortcut"));
 });
 
 test("forward uses current position, defaults to ten seconds and validates time", async () => {
@@ -282,4 +258,77 @@ test("search menu uses bounded values and reports selection failures ephemerally
   await collect(selection);
   assert.equal(failure.content, "Cannot connect");
   assert.equal(failure.ephemeral, true);
+});
+
+test("every registered slash command dispatches and responds with valid arguments", async () => {
+  const builders = require("../src/commands");
+  const { EmbedBuilder, PermissionFlagsBits } = require("discord.js");
+  const { buildGeniusSearchUrl } = require("../src/music-utils");
+  for (const command of commands) {
+    const responses = [];
+    const effects = [];
+    const state = {
+      current: { title: "Test track", author: "Artist", duration: 120 },
+      queue: [{ title: "Queued one" }, { title: "Queued two" }],
+      playing: true, volume: 80, totalTracksPlayed: 1,
+      resumeOffsetSeconds: 0, resource: { playbackDuration: 10000 },
+      audioFilters: { bassboost: false, eightd: false, nightcore: false, echo: false },
+      player: { stop: () => effects.push("skip") },
+      setAudioFilter: (...args) => effects.push(args),
+      async add() { effects.push("add"); },
+      async connect() { effects.push("connect"); },
+      async pausePlayback() { return true; }, async resumePlayback() { return true; },
+      async seek(value) { this.resumeOffsetSeconds = value; },
+      stop: () => effects.push("stop"), disconnect: () => effects.push("disconnect"),
+      shuffle: () => 2,
+      setVolume(value) { this.volume = value; }, adjustVolume(value) { this.volume += value; },
+      moveTrack: () => true, clearQueue() { this.queue = []; }
+    };
+    const channel = { id: "text", permissionsFor: () => ({ has: () => true }) };
+    const interaction = {
+      commandName: command.name,
+      guild: { channels: { fetch: async () => channel }, members: { me: {} } },
+      user: { id: "user", username: "Listener", displayAvatarURL: () => "https://example.com/avatar.png" },
+      member: { voice: { channel } }, channel,
+      options: {
+        getString: name => ({ query: "Test track", category: "all", time: "10", mode: "queue" })[name],
+        getInteger: name => ({ percent: 90, position: 1, from: 1, to: 2 })[name],
+        getChannel: () => channel
+      },
+      async deferReply() { this.deferred = true; },
+      reply: async payload => { responses.push(payload); },
+      editReply: async payload => { responses.push(payload); }
+    };
+    const handler = commandHandler(state, {
+      ...builders, EmbedBuilder, PermissionFlagsBits, buildGeniusSearchUrl,
+      client: { ws: { ping: 12 } }, Date, startedAt: Date.now() - 1000,
+      formatUptime: () => "1s", scheduleMusicSave() {},
+      config: { voiceChannelId: "voice", voiceGuildId: "guild" },
+      resolveQuery: async () => [{ title: "Resolved", duration: 120 }],
+      postLiveNowPlaying: async () => { responses.push("Live card"); },
+      replyWithQueue: async () => { responses.push("Queue card"); },
+      searchYouTube: async () => []
+    });
+    await handler(interaction);
+    await new Promise(setImmediate);
+    assert.ok(responses.length > 0, `/${command.name} did not respond`);
+    for (const response of responses) {
+      const text = typeof response === "string" ? response : response.content || "";
+      assert.ok(!/not defined|not a function|Something went wrong|An error occurred/.test(text), `/${command.name}: ${text}`);
+    }
+  }
+});
+
+test("new tracks reset old seek offsets while explicit restarts preserve theirs", async () => {
+  const GuildMusic = guildMusicClass({ console: quietConsole, updatePresence() {}, ytdlp: { exec() { throw new Error("Synthetic stream boundary"); } } });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, {
+    guild: { id: "test" }, queue: [{ title: "Fresh", url: "https://example.com/audio", duration: 180 }],
+    audioFilters: {}, resumeOffsetSeconds: 60, totalTracksPlayed: 0,
+    autoplayTriedUrls: new Set(), failPlayback() {}
+  });
+  await state.playNext();
+  assert.equal(state.resumeOffsetSeconds, 0);
+  await state.playNext(null, { title: "Restarted", url: "https://example.com/audio", resumeAtSeconds: 27 });
+  assert.equal(state.resumeOffsetSeconds, 27);
 });

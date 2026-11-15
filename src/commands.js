@@ -54,51 +54,35 @@ const commands = [
     .addStringOption(o => o.setName("category").setDescription("Choose a command category")
       .addChoices(
         { name: "All commands", value: "all" },
-        { name: "Guide", value: "guide" },
+        { name: "Info", value: "info" },
         { name: "Playback", value: "playback" },
         { name: "Queue", value: "queue" },
-        { name: "Voice", value: "voice" },
-        { name: "Settings", value: "settings" }
+        { name: "Audio effects", value: "effects" }
       ))
 ].map(command => command.toJSON());
 
 const helpCategories = [
-  { name: "Guide", value: "guide", description: "Browse the command guide and bot status.", commands: ["help", "ping", "uptime", "stats"] },
-  { name: "Playback", value: "playback", description: "Search YouTube or play YouTube and Spotify tracks, albums, and playlists.", commands: ["play", "pause", "resume", "skip", "stop", "nowplaying", "lyrics", "forward", "bassboost", "eightd", "nightcore", "echo"] },
-  { name: "Queue", value: "queue", description: "Review, shuffle, and repeat upcoming tracks.", commands: ["queue", "shuffle", "loop", "remove", "move", "clear", "search"] },
-  { name: "Voice", value: "voice", description: "Manage the bot's voice connection.", commands: ["join", "leave", "247"] },
-  { name: "Settings", value: "settings", description: "Adjust audio and notifications for this server.", commands: ["volume", "volup", "voldown", "set-notification-channel"] }
+  { name: "Playback", value: "playback", description: "Play music and manage voice and volume.", commands: ["play", "pause", "resume", "skip", "stop", "nowplaying", "lyrics", "forward", "volume", "volup", "voldown", "join", "leave", "247"] },
+  { name: "Queue", value: "queue", description: "Build your shared queue.", commands: ["queue", "shuffle", "loop", "remove", "move", "clear", "search"] },
+  { name: "Audio effects", value: "effects", description: "Shape your sound.", commands: ["bassboost", "eightd", "nightcore", "echo"] },
+  { name: "Info", value: "info", description: "Bot information and notifications.", commands: ["help", "ping", "uptime", "stats", "set-notification-channel"] }
 ];
 
-const commandAliases = {
-  p: "play",
-  ping: "ping",
-  uptime: "uptime",
-  pa: "pause",
-  r: "resume",
-  sk: "skip",
-  st: "stop",
-  q: "queue",
-  sh: "shuffle",
-  np: "nowplaying",
-  vol: "volume",
-  l: "loop",
-  rm: "remove",
-  ly: "lyrics",
-  bb: "bassboost",
-  "8d": "eightd",
-  nc: "nightcore",
-  ec: "echo",
-  remove: "remove",
-  j: "join",
-  lv: "leave",
-  h: "help",
-  mv: "move",
-  cl: "clear",
-  sr: "search",
-  stt: "stats",
-  sn: "set-notification-channel"
-};
+// Website groups are derived from the registered slash definitions and help metadata.
+const websiteCommandGroups = [
+  ["playback", "Playback"], ["queue", "Queue"], ["effects", "Audio effects"],
+  ["info", "Info and utility"], ["settings", "Settings"]
+].map(([id, label]) => ({
+  id, label,
+  commands: commands.filter(command => {
+    const name = command.name;
+    const category = ["volume", "volup", "voldown", "set-notification-channel"].includes(name)
+      ? "settings"
+      : ["join", "leave", "247"].includes(name) ? "info"
+        : helpCategories.find(group => group.commands.includes(name))?.value || "info";
+    return category === id;
+  })
+}));
 
 const buildHelpEmbed = category => {
   const selectedCategories = category === "all"
@@ -111,17 +95,8 @@ const buildHelpEmbed = category => {
       const command = commandByName.get(name);
       if (!command) return `\`/${name}\` — Command not found`;
 
-      // format: /command <opt1> <opt2> | .alias <opt1> <opt2>' - description
-      const slashOptions = command.options?.map(option => `<${option.name}>`).join(" ") || "";
-      const prefixOptions = command.options?.map(option => `<${option.name}>`).join(" ") || "";
-      const alias = Object.entries(commandAliases).find(([, target]) => target === name)?.[0];
-
-      const slashPart = `\`/${command.name}${slashOptions ? ` ${slashOptions}` : ""}\``;
-      const prefixPart = alias
-        ? `\`.${alias}${prefixOptions ? ` ${prefixOptions}` : ""}\``
-        : `\`.${command.name}${prefixOptions ? ` ${prefixOptions}` : ""}\``;
-
-      return `${slashPart} ${prefixPart} — ${command.description}`;
+      const options = command.options?.map(option => option.required ? `<${option.name}>` : `[${option.name}]`).join(" ") || "";
+      return `\`/${command.name}${options ? ` ${options}` : ""}\` — ${command.description}`;
     }).join("\n"),
     inline: false
   }));
@@ -130,7 +105,7 @@ const buildHelpEmbed = category => {
     .setColor(0x5865F2)
     .setTitle(category === "all" ? "Music | Command guide" : `Music | ${selectedCategories[0].name}`)
     .setDescription(category === "all"
-      ? "Run commands with `/` or use dot shortcuts such as `.p lo-fi beats` or `.q`. Choose a category with `/help category:<category>`."
+      ? "Use slash commands in Discord. Choose a category with `/help category:<category>`."
       : selectedCategories[0].description)
     .addFields(fields)
     .setFooter({ text: "Command options shown in angle brackets are required." })
@@ -187,7 +162,7 @@ const buildQueueEmbed = ({ current, queue, playbackStatus, page = 0 }) => {
     });
 
   if (!pageTracks.length) {
-    embed.setDescription("The queue is empty. Add a song with `/play` or `.play`.");
+    embed.setDescription("The queue is empty. Add a song with `/play`.");
   } else {
     embed.setDescription(pageTracks.map((track, index) => {
       const number = currentPage * QUEUE_PAGE_SIZE + index + 1;
@@ -276,14 +251,8 @@ const buildStatsEmbed = (state, uptime) => {
     .setTimestamp();
 };
 
-const parsePrefixCommand = content => {
-  const match = content.match(/^\.([a-z0-9]+)(?:\s+([\s\S]*))?$/i);
-  if (!match) return null;
-  const input = match[1].toLowerCase();
-  return { name: commandAliases[input] || input, args: (match[2] || "").trim() };
-};
-
 module.exports = {
+  websiteCommandGroups,
   buildHelpEmbed,
   buildNowPlayingEmbed,
   buildPlaybackEmbed,
@@ -292,8 +261,6 @@ module.exports = {
   buildStatsEmbed,
   formatDuration,
   QUEUE_PAGE_SIZE,
-  commandAliases,
   commands,
-  parsePrefixCommand,
   requesterLabel
 };
