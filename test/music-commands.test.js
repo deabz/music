@@ -87,6 +87,83 @@ test("pipeline cleanup accepts absent jobs and detaches references before cancel
   state.invalidateNext(); state.cancelActive(); state.cancelActive();
 });
 
+function skipFixture({ loop = "off", waiting = [], jobReady } = {}) {
+  const starts = [], jobs = [];
+  const GuildMusic = guildMusicClass({
+    createAudioPipeline: track => {
+      const job = { formatReady: !jobReady, ready: jobReady, stream: {}, inputType: "test", rate: 1,
+        cancel() { this.intentionallyAborted = true; } };
+      jobs.push(job); return job;
+    },
+    createAudioResource: stream => ({ stream, playbackDuration: 0, volume: { setVolume() {} } })
+  });
+  const track = { title: "Current", url: "current", duration: 100 };
+  const state = Object.assign(Object.create(GuildMusic.prototype), {
+    guild: { id: "guild" }, current: track, queue: waiting, loop, playing: true, prefetch: null,
+    activePipeline: null, resource: null, nextGeneration: 0, totalTracksPlayed: 0, volume: 80,
+    resumeOffsetSeconds: 0, autoplayTriedUrls: new Set(), audioFilters: {},
+    suggestions: { candidates: async () => [], load() {}, clearActive() {} },
+    player: { state: { status: AudioPlayerStatus.Playing }, stop() { void state.onTrackEnd(); }, play(resource) { starts.push(resource); } }
+  });
+  return { state, starts, jobs, track };
+}
+
+test("skip with no prefetch or active pipeline handles empty/waiting queues in every loop mode", async () => {
+  for (const loop of ["off", "track", "queue"]) {
+    for (const hasWaiting of [false, true]) {
+      const waiting = { title: "Waiting", url: "waiting", duration: 100 };
+      const { state, track, starts } = skipFixture({ loop, waiting: hasWaiting ? [waiting] : [] });
+      assert.equal(await state.skip(), true);
+      assert.equal(state.current, hasWaiting ? waiting : loop === "queue" ? track : null);
+      assert.equal(state.playing, hasWaiting || loop === "queue");
+      assert.equal(starts.length, hasWaiting || loop === "queue" ? 1 : 0);
+      assert.equal(state.queue.length, loop === "queue" && hasWaiting ? 1 : 0);
+      if (state.queue.length) assert.equal(state.queue[0], track);
+    }
+  }
+});
+
+test("skip immediately after natural idle with a torn-down pipeline is a safe no-op", async () => {
+  const { state } = skipFixture();
+  state.resource = { playbackDuration: 100000 };
+  await state.onTrackEnd();
+  assert.equal(state.current, null); assert.equal(state.playing, false);
+  assert.equal(await state.skip(), false); assert.equal(state.activePipeline, null);
+});
+
+test("concurrent core skips share one transition and do not skip the newly selected track", async () => {
+  let release;
+  const ready = new Promise(resolve => { release = resolve; });
+  const waiting = [{ title: "Second", duration: 100 }, { title: "Third", duration: 100 }];
+  const { state, starts } = skipFixture({ waiting, jobReady: ready });
+  const first = state.skip(), second = state.skip();
+  assert.equal(first, second); assert.equal(state.current.title, "Second");
+  release(); await Promise.all([first, second]);
+  assert.equal(starts.length, 1); assert.equal(state.current.title, "Second"); assert.equal(state.queue[0].title, "Third");
+  assert.equal(state.skipPromise, null);
+});
+
+test("skip cancels old autoplay results and stop during next startup cannot resurrect autoplay", async () => {
+  let resolveOld;
+  const { state } = skipFixture();
+  state.suggestions.candidates = () => new Promise(resolve => { resolveOld = resolve; });
+  state.prepareNext(); const old = resolveOld;
+  await state.skip();
+  old([{ title: "Stale", url: "stale", duration: 100 }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.current, null); assert.equal(state.queue.length, 0);
+  state.stop();
+  resolveOld([{ title: "Stopped", url: "stopped", duration: 100 }]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.current, null); assert.equal(state.queue.length, 0);
+
+  let release;
+  const other = skipFixture({ waiting: [{ title: "Next", duration: 100 }], jobReady: new Promise(resolve => { release = resolve; }) });
+  let suggestions = 0; other.state.prepareNext = () => { suggestions++; };
+  const skipping = other.state.skip(); other.state.stop(); release(); await skipping;
+  assert.equal(suggestions, 0); assert.equal(other.starts.length, 0); assert.equal(other.state.current, null);
+});
+
 test("known downloader failure stops without repeat/autoplay and preserves queue", async () => {
   const notices = [];
   const GuildMusic = guildMusicClass();

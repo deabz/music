@@ -76,6 +76,13 @@ test("errors before acknowledgement use a generic private reply, with follow-up 
   }
 });
 
+test("Next on an idle panel acknowledges without starting or throwing", async () => {
+  const f = fixture("next"); f.state.current = null; let skips = 0;
+  f.state.skip = async () => { skips++; return false; };
+  await f.handler(f.interaction);
+  assert.equal(f.calls[0], "defer"); assert.equal(skips, 1); assert.equal(f.calls.at(-1), "update");
+});
+
 
 test("effects menu preselects enabled filters and submits one exact set including empty", async () => {
   const f = fixture("effects"); f.state.audioFilters = { echo: true };
