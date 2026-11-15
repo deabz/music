@@ -6,6 +6,7 @@ const storage = require("./storage");
 const { FavouritesStore } = require("./favourites");
 const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
+const { SongMemory } = require("./song-identity");
 const { createPlayerPanel, buildPlayConfirmation, formatTrackTitle, short } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic, streamEndDiagnostic } = require("./playback-errors");
@@ -165,6 +166,7 @@ class GuildMusic {
     this.pauseOnRestore = false;
     this.savedVoiceChannelId = null;
     this.autoplayTriedUrls = new Set();
+    this.autoplayMemory = new SongMemory();
     this.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
     this.connection = null;
     this.activePipeline = null;
@@ -191,6 +193,7 @@ class GuildMusic {
       if (next.resource && next.resource !== this.resource) return;
       console.log(`[${new Date().toISOString()}] [player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
       if (next.status === AudioPlayerStatus.Playing) {
+        if (this.current) this.autoplayMemory?.recordStart(this.current);
         if (this.activePipeline && !this.activePipeline.startedAt) this.activePipeline.startedAt = Date.now();
         this.suggestions?.load(this.current);
         this.prepareNext();
