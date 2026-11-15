@@ -463,12 +463,14 @@ class GuildMusic {
     this.cancelActive();
     if (!next) {
       this.current = null;
+      this.panelSuggestions = [];
       this.playing = false;
       updatePresence();
       scheduleMusicSave();
       return;
     }
     this.current = next;
+    this.suggestions?.load(next);
     this.resumeOffsetSeconds = Number.isFinite(next.resumeAtSeconds) ? next.resumeAtSeconds : 0;
     delete next.resumeAtSeconds;
     this.playing = true;
@@ -848,9 +850,9 @@ client.once(Events.ClientReady, async ready => {
       state = getMusic(guild);
       state.restorePanel?.(snapshot);
       if (typeof snapshot.voiceChannelId === "string") {
-      const channel = await guild.channels.fetch(snapshot.voiceChannelId);
-      if (!channel?.isVoiceBased()) throw new Error("Saved voice channel is unavailable.");
-      await state.restore(snapshot, channel);
+        const channel = await guild.channels.fetch(snapshot.voiceChannelId);
+        if (!channel?.isVoiceBased()) throw new Error("Saved voice channel is unavailable.");
+        await state.restore(snapshot, channel);
       }
     } catch (error) { console.error(`[persistence:${guildId}] Could not restore music state: ${error.message}`); }
     finally { await state?.panel?.reattach(); }

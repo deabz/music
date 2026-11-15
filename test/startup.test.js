@@ -124,3 +124,18 @@ test("fatal process handlers log and request shutdown with a failure exit code",
   handlers.get("uncaughtException")(new Error("synthetic"));
   assert.deepEqual(exits, [1, 1]);
 });
+test("panel reattachment still runs when a saved voice channel is gone", async () => {
+  const begin = source.indexOf("client.once(Events.ClientReady, async ready => {");
+  const finish = source.indexOf("\nconst handleCommand", begin);
+  let handler, attached = 0, restoredIdentity;
+  const state = { restorePanel: snapshot => { restoredIdentity = snapshot.panelMessageId; },
+    panel: { reattach: async () => { attached++; } } };
+  const context = { startupComplete: false, shuttingDown: false, console: { log() {}, error() {} },
+    client: { once: (_, fn) => { handler = fn; } }, Events: { ClientReady: "ready" }, updatePresence() {},
+    registerCommands: async () => {}, loadMusicState: async () => {}, favourites: { load: async () => {} },
+    savedMusicStates: { guild: { voiceChannelId: "gone", panelChannelId: "text", panelMessageId: "existing" } },
+    getMusic: () => state, music: new Map(), config: {} };
+  vm.runInNewContext(source.slice(begin, finish), context);
+  await handler({ user: { tag: "synthetic" }, guilds: { fetch: async () => ({ channels: { fetch: async () => { throw new Error("gone"); } } }) } });
+  assert.equal(attached, 1); assert.equal(restoredIdentity, "existing"); assert.equal(context.startupComplete, true);
+});

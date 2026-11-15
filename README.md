@@ -113,8 +113,18 @@ classifier. Recent suggestion URLs are tracked in memory for the current session
 ## Persistent Discord player panel
 
 Each server has one normal bot message with a gold queue embed, suggestions, and three button rows.
+The title counts current plus waiting tracks. The current song is a linked title (about 50 characters),
+with its duration on the first line and requester on the second. A separate **Up Next:** section shows
+up to ten waiting songs: code-styled positions starting at 1, bold unlinked titles (about 40 characters),
+duration, and requester. Extra waiting songs use an "...and N more" line. Autoplay is labelled Autoplay;
+the footer shows the bot avatar and volume. Track titles have no decorative prefixes.
+Successful `/play` commands post a public **Title** added to the queue or **N tracks** added to the
+queue confirmation, with escaped titles and mention notifications disabled. Processing, errors,
+permission refusals, effects menus, and favourites menus remain private. A private processing reply
+is completed before the public confirmation and then removed; it is never the player message.
 The panel is edited in place; `/nowplaying` deletes it and posts a fresh copy in your current channel.
 Channel/message IDs are saved in the existing guild snapshot backend and reattached on restart.
+Grant the bot View Channel, Read Message History, Send Messages, and Embed Links in the panel channel.
 Missing messages are replaced when needed. Updates debounce for 800 ms and serialize per server;
 permission failures log once and wait for an explicit command before retrying.
 
@@ -125,6 +135,9 @@ permission failures log once and wait for an explicit command before retrying.
   queue but keeps the voice connection and idle panel.
 - Effects opens a private multi-select; the chosen set is applied in one restart, keeping position.
 - Suggestions reuse autoplay filtering and are cached per track; selecting one queues it as you.
+  The menu shows five options by default; edit `PANEL_SUGGESTION_COUNT` in `src/player-panel.js` to
+  change the display count. Labels are titles; descriptions are `channel - youtube - mm:ss`, with
+  the channel truncated first to preserve the source and time. IDs are short tokens, not URLs.
 - Heart adds/removes the current song from your favourites. My favourites opens your private list.
 
 All controls require the bot's voice channel, with Manage Server/Administrator override.
@@ -132,5 +145,5 @@ History and suggestion caches are in memory. Favourites are global per user (max
 atomically in `data/favourites.json`, independently of guild state, including when guild snapshots
 use Supabase. No database migration is required. A failed favourites load disables writes to protect
 existing data. Copy this file when moving PCs; it is not synced to Supabase. Run one bot process.
-The panel sends no mention notifications. Real Discord appearance and long-lived interaction
+Markdown in titles is escaped, title mentions are neutralized, and the panel sends no mention notifications. Real Discord appearance and long-lived interaction
 behaviour require a manual check; automated tests use synthetic channels and interactions.

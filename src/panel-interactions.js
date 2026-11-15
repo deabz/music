@@ -10,7 +10,7 @@ const ACTION_PERMISSIONS = {
 };
 const privateReply = (interaction, content) => interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
 function createPanelInteractionHandler({ getMusic, isReady = () => true, favourites, log = console.error } = {}) {
-  return async interaction => {
+  const handle = async interaction => {
     if (!interaction.customId?.startsWith(PANEL_PREFIX) || !(interaction.isButton?.() || interaction.isStringSelectMenu?.())) return false;
     if (!interaction.guild || !isReady()) {
       await privateReply(interaction, "The player is unavailable while the bot initializes or shuts down.");
@@ -102,6 +102,18 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
       await interaction.followUp({ content: "Could not use that control. Try again or check the bot's permissions.", ephemeral: true }).catch(() => {});
     }
     return true;
+  };
+  return async interaction => {
+    try { return await handle(interaction); }
+    catch (error) {
+      log(`[panel:${interaction.guild?.id || "unknown"}] Interaction failed: ${error.stack || error.message}`);
+      const payload = { content: "Could not use that control. Please try again.", ephemeral: true, allowedMentions: { parse: [] } };
+      try {
+        if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
+        else await interaction.reply(payload);
+      } catch { /* Expired/failed acknowledgements must not terminate the bot. */ }
+      return true;
+    }
   };
 }
 module.exports = { createPanelInteractionHandler, ACTION_PERMISSIONS };

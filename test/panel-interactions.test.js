@@ -113,3 +113,13 @@ test("heart toggles a private per-user favourite and the private menu queues as 
   f.interaction.user.id = "intruder"; added = null;
   await handler(f.interaction); assert.equal(added, null); assert.match(f.calls.at(-1).content, /another listener/);
 });
+
+
+test("expired acknowledgements are logged and cannot escape as unhandled rejections", async () => {
+  const f = fixture("next"); let logs = 0;
+  const handler = createPanelInteractionHandler({ getMusic: () => f.state, log: () => { logs++; } });
+  f.interaction.deferUpdate = async () => { throw new Error("synthetic expired interaction"); };
+  f.interaction.reply = async () => { throw new Error("already expired"); };
+  assert.equal(await handler(f.interaction), true);
+  assert.equal(logs, 1); assert.ok(!f.calls.includes("skip"));
+});

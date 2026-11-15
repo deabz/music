@@ -70,7 +70,7 @@ function buildPlayerPanel(state, { avatarUrl } = {}) {
     if (["vol-down", "vol-up", "favourites"].includes(action)) disabled = false;
     if (action === "shuffle") disabled = queue.length < 2;
     if (["stop", "loop"].includes(action)) disabled = !tracks.length;
-    return { type: 2, custom_id: PANEL_PREFIX + action, label, style: action === "loop" && state.loop !== "off" ? 3 : 2,
+    return { type: 2, custom_id: PANEL_PREFIX + action, label, style: action === "loop" && (state.loop || "off") !== "off" ? 3 : 2,
       emoji: { name: action === "loop" && state.loop === "track" ? "\uD83D\uDD02" : emoji }, disabled };
   }) });
   return { embeds: [embed], components, allowedMentions: { parse: [], users: [], roles: [], repliedUser: false } };
@@ -90,7 +90,7 @@ class PlayerPanel {
     this.state.panelMessageId = messageId;
     this.onIdentity();
   }
-  wake() { this.blocked = false; this.scheduleUpdate(); }
+  wake() { if (this.blocked) this.signature = null; this.blocked = false; this.scheduleUpdate(); }
   scheduleUpdate() {
     if (this.disposed || this.blocked || !this.state.panelChannelId) return;
     if (JSON.stringify(buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() })) === this.signature) return;

@@ -143,3 +143,35 @@ test("suggestion count has one exported setting and channel descriptions retain 
     assert.ok(option.label.startsWith("Title ")); assert.ok(option.value.startsWith("short_"));
   }
 });
+test("play/pause/loop states are reflected and idle/replay keep the same message", async () => {
+  for (const status of ["playing", "paused", "buffering"]) {
+    const payload = buildPlayerPanel({ current: track(), queue: [], player: { state: { status } }, loop: "off" });
+    const row = payload.components[1].components;
+    assert.equal(row[0].disabled, status !== "paused");
+    assert.equal(row[2].disabled, status !== "playing");
+    assert.equal(row[4].style, 2);
+  }
+  const f = fixture(); await f.manager.ensure("channel");
+  f.state.current = null; await f.manager.flush();
+  assert.equal(f.state.panelMessageId, "message"); assert.equal(f.calls.sends, 1);
+  f.state.current = track("New song"); await f.manager.ensure("elsewhere");
+  assert.equal(f.calls.sends, 1); assert.equal(f.state.panelChannelId, "channel");
+});
+test("large hostile metadata stays below embed limits with ten waiting entries and complete links", () => {
+  const waiting = Array.from({ length: 1000 }, () => track("\\[**@everyone**\\]".repeat(100)));
+  const payload = buildPlayerPanel({ current: { ...track("Current"), url: "https://youtube.com/watch?v=(test)" }, queue: waiting, loop: "off" });
+  const description = payload.embeds[0].description;
+  assert.ok(description.includes("watch?v=%28test%29) - [`02:05`],"));
+  assert.ok(description.includes("`10.`")); assert.ok(!description.includes("`11.`"));
+  assert.match(description, /\.\.\.and 990 more$/); assert.ok(description.length < 4096);
+  assert.ok(!description.includes("@everyone"));
+});
+test("confirmation helper emits exact public text with escaped titles and no mentions", () => {
+  const { buildPlayConfirmation } = require("../src/player-panel");
+  assert.equal(buildPlayConfirmation([track("Song")]).content, "**Song** added to the queue");
+  assert.equal(buildPlayConfirmation([track(), track()]).content, "**2 tracks** added to the queue");
+  const unsafe = buildPlayConfirmation([track("[test] @everyone <@&12345678901234567>")]);
+  assert.ok(unsafe.content.includes("\\[test\\]")); assert.ok(!unsafe.content.includes("@everyone"));
+  assert.ok(!unsafe.content.includes("<@&")); assert.deepEqual(unsafe.allowedMentions.users, []);
+  assert.deepEqual(unsafe.allowedMentions.roles, []); assert.equal(unsafe.ephemeral, false);
+});
