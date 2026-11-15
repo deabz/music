@@ -6,6 +6,7 @@ cookies.txt
 data/
 node_modules/
 .git/
+.github/
 .agents/
 .codex/
 .aws/

@@ -193,3 +193,84 @@ The branch is locally fast-forward compatible, but no merge or push is authorize
 in this task. Review final Git status and commit identity with the accompanying
 summary. No dependency, node_modules, protected secret file, or bot runtime changes
 were made during this investigation.
+
+## Release execution follow-up (2026-11-15)
+
+Starting point: clean render-ready at dcae04e6407524c4b6ea1bd9d5b89bb04f84c48b.
+The prior authorised push published that branch; the public repository is approved
+for this work. Main is not a deployment/push target. No protected secret files were
+loaded, and no local dependencies were installed or modified.
+
+### Issues found and changes
+
+* The Blueprint omitted its branch, leaving a newly created service liable to use
+  the repository's default main branch instead of verified render-ready. Set the
+  explicit branch and added a regression test.
+* No repeatable clean Linux/Docker verification existed. Added the Release
+  verification workflow for Ubuntu with Node 22 and 24, full-history scanning,
+  production Docker build and an unprivileged offline image smoke test. The
+  workflow receives no deployment credentials and cannot write repository contents.
+* Added test:runtime: real yt-dlp/FFmpeg executables, real stereo WebM probing,
+  all effect graphs, 60-second trimming, Opus encoding, DAVE loading, crypto,
+  temporary JSON storage and public HTTP/readiness. A synthetic FFmpeg source
+  substitutes only the network extractor. This is not a real YouTube or voice test.
+* Added verify:discord with read-only REST checks and five regression tests. It
+  checks bot/application identity, guild installation, guild permissions and
+  registered command names, with no token/error-body output. It never registers
+  commands, loads dotenv, logs into the gateway or joins voice. Incomplete checks
+  exit nonzero rather than claiming success.
+
+### Commands executed locally
+
+| Command | Actual result |
+| --- | --- |
+| git status --short --branch; git log -1 | Clean render-ready at the starting revision. |
+| gh repo view --json nameWithOwner,isPrivate,defaultBranchRef | Public deabz/music, default branch main. |
+| gh workflow list | No existing workflows at initial inspection. |
+| Get-Command docker,podman,wsl,gh,ssh; wsl --list --quiet | No Docker/Podman; WSL returned no distribution. |
+| npm test | Baseline 241 passed; after changes 247 passed, zero failures/skips. |
+| npm run check | PASS, including new scripts and module syntax/UTF-8. |
+| npm run test:website | PASS: 14 reported browser scenarios, dark/light at 320/390/1280 widths, all pages, controls, responsive layout, privacy, reduced motion and no JavaScript. Zero unexpected console errors; ten expected HTTP diagnostics. Screenshots stayed in OS temp. |
+| npm run test:runtime | PASS: eight pipeline combinations, executable/codecs, JSON and HTTP. No network/Discord. |
+| npm run selftest | PASS on Windows: Node v24.19.0; yt-dlp 2026.10.26; FFmpeg 6.1.1; gateway HTTP 200; search=3/audio=262144 bytes; both UDP DNS replies. Python unavailable (informational on Windows). Cookies/proxy unconfigured. |
+| node -e (scanRepository metadata summary) | Working-tree and full-history scan PASS, no unresolved findings/errors. Scanner rules unchanged. |
+| npm run verify:discord -- --application-id 1552484084243234848 --guild-id 1114203697619152926 | PENDING, exit 1: DISCORD_TOKEN absent. No request or login attempted. |
+
+The runtime harness initially used a mono source and incorrectly expected the
+stereo fast path; it was corrected to generate stereo. An initial resource-end
+wait was also replaced with explicit Opus encode verification. These were harness
+issues, not bot defects. Completed runs check close events and cancel child jobs.
+
+### Authorised live setup and limitations
+
+Application/bot ID: 1552484084243234848. Test guild: 1114203697619152926.
+These are identifiers, not credentials. Installation and permissions are NOT yet
+confirmed; the process has no DISCORD_TOKEN. Supply it securely to the verification
+process, then use the read-only command above. On the actual bot host, set GUILD_ID
+to the test guild for immediate test registration. OAuth scopes: bot and
+applications.commands. Requested intents are Guilds, GuildVoiceStates and
+GuildMessages; the new offline test verifies them. Privileged Message Content and
+Guild Members are not requested. Channel overwrites and audible voice still need
+the designated text/voice channels and the live checklist. The user explicitly
+withheld live validation until authorised access exists; no substitute account,
+guessed token, protected file or second bot instance was used.
+
+Render live validation is PENDING: no service ID/URL or authorised access exists.
+Required identifiers: service ID (srv-...), public HTTPS URL, deployed branch and
+revision. Required runtime secret: DISCORD_TOKEN. Optional features need
+MUSIC_DASHBOARD_TOKEN, SPOTIFY_CLIENT_ID/SPOTIFY_CLIENT_SECRET,
+SUPABASE_URL with SUPABASE_SECRET_KEY (or legacy SUPABASE_SERVICE_ROLE_KEY),
+YTDLP_PROXY, and a Secret File referenced by YOUTUBE_COOKIES_FILE. PORT is provided
+by Render; AUTO_JOIN_VOICE=false is safe until VOICE_GUILD_ID/VOICE_CHANNEL_ID are
+configured. README lists every optional tuning variable and setup instructions.
+
+Use the dashboard to confirm Docker runtime, ./Dockerfile, render-ready, PORT and
+normal npm start image command; inspect runtime diagnostics with secret values
+hidden. /health is HTTP liveness, not bot readiness; /healthz JSON must become 200
+after ready and returns 503 offline. Supabase's music_state table/schema and live
+read/write connectivity remain unverified. JSON storage was exercised for real.
+Ephemeral disk/favourites loss, host UDP restrictions, YouTube datacenter blocking
+and free-tier memory remain deployment risks. No cost-bearing service was created.
+
+Hosted Linux/Docker execution results will be recorded after the workflow runs.
+Until then they remain pending, rather than inferred from the Windows results.

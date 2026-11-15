@@ -97,7 +97,36 @@ interfaces. The image defaults to 10000 for local Docker use. Do not set NODE_VE
 or a separate native build/start command. `render.yaml` is the equivalent Blueprint;
 its existing Starter plan can be changed deliberately in the dashboard. Optional
 sync:false values may be left unset when their feature is unused. Never bake secrets
-into the image. Docker was reviewed statically here; a Linux build still needs checking.
+into the image. The Blueprint explicitly deploys `render-ready`; confirm that branch
+in the service dashboard too. See RENDER_VERIFICATION.md for executed build results.
+
+The Release verification GitHub Actions workflow runs clean Ubuntu/Node 22 and 24
+tests and builds the production image. `npm run test:runtime` exercises the real
+FFmpeg pipeline using synthetic stereo audio, all effects, seek offsets, codecs,
+HTTP and temporary JSON storage without Discord or a public network. The Docker
+job repeats it as the image's unprivileged user with networking disabled. Its
+public-network self-test is informational; inspect its diagnostics separately.
+
+For authorised live verification, configure `DISCORD_TOKEN` securely in the process
+environment and run `npm run verify:discord -- --application-id 1552484084243234848
+--guild-id 1114203697619152926` on one line. The verifier does not load `.env`, log
+tokens, register commands or join voice. It checks bot identity, installation,
+guild-level permissions and registered commands using read-only REST requests.
+It exits nonzero for pending checks, including channel overwrites and live voice.
+For immediate test-guild registration, set `GUILD_ID=1114203697619152926` on the
+authorised bot host before its normal startup. Do not run a second bot instance
+with the same token. Required OAuth scopes are `bot` and `applications.commands`;
+grant View Channel, Send Messages, Embed Links, Read Message History, Connect and
+Speak in the test text/voice channels. The code requests Guilds, GuildVoiceStates
+and GuildMessages, without privileged Message Content or Guild Members intents.
+
+Live Render checks need the service's dashboard ID (`srv-...`), public HTTPS URL,
+selected branch/revision, and authorised dashboard or API access. Keep API access
+credentials in the environment, never in Git or chat. Confirm Docker startup,
+`/health` HTTP 200 (HTTP liveness), `/healthz` JSON HTTP 200 after Discord readiness
+(503 before), PORT binding and the diagnostics block in runtime logs. Test database
+connectivity only with the configured Supabase project and approved access. Playback
+snapshots require its `music_state` table; favourites still require disk/backups.
 
 | Environment variable | Required? | Meaning / default |
 | --- | --- | --- |

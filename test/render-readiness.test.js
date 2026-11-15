@@ -51,3 +51,11 @@ test("Docker and shell line endings remain LF and private files stay outside the
   const ignored = fs.readFileSync(require.resolve("../.dockerignore"), "utf8");
   for (const name of [".env", "cookies.txt", "data/", "node_modules/", ".git/", "logs/"]) assert.ok(ignored.split("\n").includes(name));
 });
+
+test("Render deploys the verified branch using the production Docker health endpoint", () => {
+  const blueprint = fs.readFileSync(require.resolve("../render.yaml"), "utf8");
+  assert.match(blueprint, /branch: render-ready/);
+  assert.match(blueprint, /runtime: docker/);
+  assert.match(blueprint, /healthCheckPath: \/health/);
+  assert.ok(!/NODE_VERSION|buildCommand:|startCommand:/.test(blueprint));
+});

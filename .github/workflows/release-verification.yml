@@ -1,0 +1,38 @@
+name: Release verification
+on:
+  push:
+    branches: [render-ready]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+      - run: npm run scan:secrets
+      - run: npm run test:runtime
+      - name: Build production image
+        if: matrix.node == 22
+        run: docker build --pull -t nyx-release .
+      - name: Exercise image without Discord or network
+        if: matrix.node == 22
+        run: docker run --rm --network none nyx-release node scripts/runtime-smoke.cjs
+      - name: Public network diagnostics (results are informational)
+        if: matrix.node == 22
+        run: docker run --rm nyx-release npm run selftest

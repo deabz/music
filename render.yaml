@@ -2,6 +2,7 @@ services:
   - type: web
     name: discord-music-bot
     runtime: docker
+    branch: render-ready
     plan: starter
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
