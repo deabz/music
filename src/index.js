@@ -473,9 +473,19 @@ class GuildMusic {
 
   failPlayback(track, error) {
     if (!track || this.current !== track) return;
-    if (this.isShortStream()) return this.retryShortStream(track, error);
     const detail = this.activePipeline?.stderr || error.stderr || error.message;
     const reason = classifyStreamFailure(detail);
+    if (reason.code === "403" && !track.http403Retries) {
+      const position = playbackPosition(this);
+      const wasPaused = this.player.state.status === AudioPlayerStatus.Paused || this.pauseOnRestore;
+      console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Retry 403 once track=${JSON.stringify(track.title)}\n${detail}`);
+      this.current = null;
+      this.invalidateNext();
+      this.cancelActive();
+      this.player.stop(true);
+      this.pauseOnRestore = wasPaused;
+      return this.playNext(null, { ...track, http403Retries: 1, resumeAtSeconds: position });
+    }
     console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Failed track=${JSON.stringify(track.title)} reason=${reason.code}\n${detail}`);
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
@@ -527,8 +537,8 @@ class GuildMusic {
     if (!endedTrack) return;
     const job = this.activePipeline;
     if (job?.intentionallyAborted) return;
-    if (this.isShortStream()) return this.retryShortStream(endedTrack, job?.error || new Error("Audio ended within three seconds."));
     if (job?.error) return this.failPlayback(endedTrack, job.error);
+    if (this.isShortStream()) return this.retryShortStream(endedTrack, new Error("Audio ended within three seconds."));
     const position = playbackPosition(this);
     if (Number.isFinite(endedTrack.duration) && position < endedTrack.duration - NATURAL_END_TOLERANCE_SECONDS) {
       return this.failPlayback(endedTrack, new Error(`Audio ended early at ${position.toFixed(1)}s of ${endedTrack.duration}s.`));
@@ -536,6 +546,7 @@ class GuildMusic {
     if (job) job.naturalAudioEnd = true;
     this.shortStreamFailures = 0;
     delete endedTrack.streamRetry;
+    delete endedTrack.http403Retries;
     // Pipeline EOF already requires successful child exit; do not await anything here.
     console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Ended track=${JSON.stringify(endedTrack.title)} position=${playbackPosition(this).toFixed(1)}s duration=${endedTrack.duration}s`);
     this.current = null;

@@ -73,7 +73,7 @@ test("known downloader failure stops without repeat/autoplay and preserves queue
   Object.assign(state, {
     guild: { id: "guild", client: { channels: { cache: new Map([["text", { send: async m => notices.push(m) }]]) } } },
     notificationChannelId: "text", current: track, queue, playing: true,
-    activePipeline: { error: new Error("403"), cancel() {} }, loop: "track",
+    activePipeline: { error: new Error("network failure"), cancel() {} }, loop: "track",
     player: { stop() { state.onTrackEnd(); } }
   });
   state.playNext = () => assert.fail("Known failures must not repeat");
@@ -546,4 +546,41 @@ test("library errors are logged but Discord receives a generic response", async 
     deferReply: async () => {}, reply: async text => { response = text; } });
   assert.ok(!JSON.stringify(response).includes("PRIVATE_PATH"));
   assert.match(response, /could not be completed/);
+});
+
+
+test("403 retries once at the current position; duplicate old callbacks cannot start another copy", async () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.create(GuildMusic.prototype);
+  const track = { title: "403 song", duration: 180 };
+  const starts = [], notices = [];
+  Object.assign(state, { guild: { id: "test", client: { channels: { cache: new Map([["text", { send: async value => notices.push(value) }]]) } } },
+    notificationChannelId: "text", current: track, playing: true, queue: [{ title: "kept" }], resumeOffsetSeconds: 10,
+    resource: { playbackDuration: 5000 }, player: { state: {}, stop() {} },
+    activePipeline: { stderr: "HTTP Error 403: Forbidden", cancel() {} } });
+  state.playNext = async (_, retry) => {
+    starts.push(retry); state.current = retry;
+    state.activePipeline = { stderr: "HTTP Error 403: Forbidden", cancel() {} };
+  };
+  await state.failPlayback(track, new Error("403"));
+  assert.equal(starts.length, 1); assert.equal(starts[0].http403Retries, 1);
+  assert.equal(starts[0].resumeAtSeconds, 15);
+  await state.failPlayback(track, new Error("late duplicate 403"));
+  assert.equal(starts.length, 1);
+  await state.failPlayback(state.current, new Error("403"));
+  assert.equal(starts.length, 1); assert.equal(notices.length, 1);
+  assert.match(notices[0].content, /refused the download \(403\)/);
+  assert.equal(state.queue[0].title, "kept");
+});
+
+test("identified non-403 download errors do not retry even within three seconds", () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { guild: { id: "test", client: { channels: { cache: new Map() } } },
+    current: { title: "limited", duration: 180 }, queue: [], playing: true, resumeOffsetSeconds: 0,
+    activePipeline: { startedAt: 1, stderr: "HTTP Error 429", cancel() {} }, resource: { playbackDuration: 100 },
+    player: { stop() {} } });
+  state.playNext = () => assert.fail("429 must not be retried");
+  state.failPlayback(state.current, new Error("429"));
+  assert.equal(state.current, null);
 });
