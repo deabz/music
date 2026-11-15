@@ -34,6 +34,11 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
     if (action === "next" && skipping.has(state)) {
       await privateReply(interaction, "A skip is already in progress."); return true;
     }
+    const restartAction = ["previous", "next", "rewind", "forward", "effects-apply"].includes(action);
+    if (restartAction && (state.interactionRestarting || state.restartTransaction || state.skipPromise)) {
+      await privateReply(interaction, "Please wait; a stream restart is in progress."); return true;
+    }
+    if (restartAction) state.interactionRestarting = true;
     if (action === "next") skipping.add(state);
     try {
     state.panel?.wake();
@@ -114,6 +119,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
     }
     return true;
     } finally {
+      if (restartAction) state.interactionRestarting = false;
       if (action === "next") skipping.delete(state);
     }
   };

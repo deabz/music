@@ -948,26 +948,35 @@ const handleCommand = async interaction => {
   state.panel?.wake();
   const accessError = musicAccessError(interaction, state);
   if (accessError) return reply(interaction, { content: accessError, ephemeral: true });
+  const restartCommand = ["bassboost", "eightd", "nightcore", "echo", "forward", "skip"].includes(interaction.commandName);
+  if (restartCommand && (state.interactionRestarting || state.restartTransaction || state.skipPromise)) {
+    return reply(interaction, { content: "Please wait; a stream restart is in progress.", ephemeral: true });
+  }
+  if (restartCommand) state.interactionRestarting = true;
   try {
     if (interaction.commandName === "bassboost") {
+      await interaction.deferReply();
       const enabled = !state.audioFilters.bassboost;
       await state.setAudioFilter("bassboost", enabled);
-      return reply(interaction, `Bass boost is now ${enabled ? "enabled" : "disabled"}.`);
+      return interaction.editReply(`Bass boost is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "eightd") {
+      await interaction.deferReply();
       const enabled = !state.audioFilters.eightd;
       await state.setAudioFilter("eightd", enabled);
-      return reply(interaction, `8D audio is now ${enabled ? "enabled" : "disabled"}.`);
+      return interaction.editReply(`8D audio is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "nightcore") {
+      await interaction.deferReply();
       const enabled = !state.audioFilters.nightcore;
       await state.setAudioFilter("nightcore", enabled);
-      return reply(interaction, `Nightcore is now ${enabled ? "enabled" : "disabled"}.`);
+      return interaction.editReply(`Nightcore is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "echo") {
+      await interaction.deferReply();
       const enabled = !state.audioFilters.echo;
       await state.setAudioFilter("echo", enabled);
-      return reply(interaction, `Echo is now ${enabled ? "enabled" : "disabled"}.`);
+      return interaction.editReply(`Echo is now ${enabled ? "enabled" : "disabled"}.`);
     }
     if (interaction.commandName === "play") {
       let memberChannel = await resolveMemberVoiceChannel(interaction);
@@ -1046,8 +1055,9 @@ const handleCommand = async interaction => {
       return interaction.editReply(`Forwarded to ${formatDuration(state.resumeOffsetSeconds)}.`);
     }
     if (interaction.commandName === "skip") {
+      await interaction.deferReply();
       const skipped = await state.skip();
-      return reply(interaction, skipped ? "Skipped the current track." : "Nothing is playing.");
+      return interaction.editReply(skipped ? "Skipped the current track." : "Nothing is playing.");
     }
     if (interaction.commandName === "stop") {
       state.stop(); return reply(interaction, "Playback stopped and the queue was cleared.");
@@ -1179,6 +1189,8 @@ const handleCommand = async interaction => {
     const errorMessage = "The command could not be completed. Check permissions and input, then try again. Details are in the host logs.";
     if (interaction.deferred) await interaction.editReply(errorMessage).catch(() => {});
     else await reply(interaction, errorMessage);
+  } finally {
+    if (restartCommand) state.interactionRestarting = false;
   }
 };
 
