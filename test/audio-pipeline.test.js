@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 const { createAudioPipeline: createPipeline, PREFETCH_BYTES, terminateChild } = require("../src/audio-pipeline");
+const { streamFailureDiagnostic } = require("../src/playback-errors");
 
 function createAudioPipeline(track, filters, offset, launch, type = "webm/opus") {
   return createPipeline(track, filters, offset, launch, async stream => ({ stream, type }));
@@ -19,6 +20,23 @@ function launcher() {
   };
   return { calls, spawn };
 }
+
+test("FFmpeg failure diagnostic includes stage, exits, both stderr tails and redacted arguments", async () => {
+  const fixture = launcher();
+  const job = createAudioPipeline({ title: "Track", url: "test" }, { echo: true }, 60, fixture.spawn);
+  await job.ready;
+  job.diagnosticSecrets.push("C:\\private\\cookies.txt", "synthetic-token");
+  job.commands[0].args.push("--cookies", "C:\\private\\cookies.txt", "token=synthetic-token");
+  fixture.calls[0].child.stderr.write("extract tail");
+  fixture.calls[1].child.stderr.write("filter tail C:\\private\\cookies.txt");
+  fixture.calls[1].child.emit("close", 7, null);
+  const text = streamFailureDiagnostic({ guild: { id: "guild" }, activePipeline: job }, { title: "Song" }, job.error);
+  const log = JSON.parse(text);
+  assert.equal(log.stage, "ffmpeg"); assert.equal(log.guild, "guild"); assert.equal(log.position, 60);
+  assert.equal(log.exits.ffmpeg.code, 7); assert.equal(log.effects.echo, true);
+  assert.match(log.ytdlpStderr, /extract tail/); assert.match(log.ffmpegStderr, /filter tail/);
+  assert.ok(!text.includes("synthetic-token")); assert.ok(!text.includes("private")); assert.match(text, /redacted/);
+});
 test("shared pipeline buffers with backpressure and preserves effect/seek options", async () => {
   const { calls, spawn } = launcher();
   const job = createAudioPipeline({ url: "https://youtube.invalid/song" }, { echo: true }, 12, spawn);

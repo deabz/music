@@ -111,6 +111,13 @@ classifier. Recent suggestion URLs are tracked in memory for the current session
 
 
 ## Song transitions
+Effect commands acknowledge before restarting audio. Effect/seek replacements preserve
+the current position and paused state, discard prefetch built with old filters, and
+reject overlapping restart requests. Failed changes restore the previous filters and
+position; if that rollback also fails, normal playback error handling keeps the queue.
+Host stream-failure logs include pipeline stage, known child exit codes, both stderr
+tails, filters and start position, with cookie paths and credentials redacted.
+
 
 Optional `TRANSITION_MODE` accepts `off`, `fade` (default), or `crossfade`.
 Invalid modes warn and fall back to `fade`. Optional `TRANSITION_SECONDS` is the

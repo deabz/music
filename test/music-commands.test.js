@@ -205,6 +205,35 @@ test("failed effect startup restores filters and saved paused position without c
   assert.equal(f.state.shortStreamFailures, 1); assert.equal(f.state.restartTransaction, null);
 });
 
+test("each slash effect acknowledges before restart; overlapping slash/panel work is politely refused", async () => {
+  for (const effect of ["bassboost", "eightd", "nightcore", "echo"]) {
+    const events = []; let release;
+    const state = { audioFilters: {}, setAudioFilter: async () => { events.push("restart"); } };
+    const handler = commandHandler(state);
+    const interaction = { guild: {}, commandName: effect,
+      deferReply: () => { events.push("defer"); return new Promise(resolve => { release = resolve; }); },
+      editReply: async value => events.push(value) };
+    const first = handler(interaction);
+    await handler({ ...interaction, reply: async value => { assert.equal(value.ephemeral, true); assert.match(value.content, /Please wait/); } });
+    assert.deepEqual(events, ["defer"]); release(); await first;
+    assert.deepEqual(events.slice(0, 2), ["defer", "restart"]); assert.match(events[2], /enabled/);
+    assert.equal(state.interactionRestarting, false);
+  }
+});
+
+test("special-character titles survive effect restart and stale resource Idle cannot affect the replacement", async () => {
+  const f = transitionFixture();
+  const title = 'Major Lazer & MOTi - Boom (feat. Ty Dolla $ign) [Official "Lyric" Video]';
+  f.state.current.title = title; f.state.resource.playbackDuration = 20000;
+  const old = f.state.resource;
+  await f.state.setAudioFilters(["bassboost", "echo"]);
+  const resource = f.state.resource;
+  assert.equal(f.state.current.title, title); assert.equal(f.state.resumeOffsetSeconds, 20);
+  assert.equal(f.state.audioFilters.bassboost, true); assert.equal(f.state.audioFilters.echo, true);
+  await f.state.onTrackEnd(old);
+  assert.equal(f.state.resource, resource); assert.equal(f.state.playing, true); f.state.stop();
+});
+
 test("clean early EOF advances without waiting for metadata; short-stream detection uses real audio", async () => {
   const f = transitionFixture(); f.state.resource.playbackDuration = 10000;
   f.state.activePipeline = { sourceEnded: true, outputDone: true, children: [{ pipelineClosed: true }], cancel() {} };
