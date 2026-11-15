@@ -49,6 +49,8 @@ function guildMusicClass(overrides = {}) {
   const end = source.indexOf("\nconst client =", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     AudioPlayerStatus,
+    classifyStreamFailure: require("../src/playback-errors").classifyStreamFailure,
+    playbackPosition: require("../src/playback-position").playbackPosition,
     shuttingDown: false,
     AbortController,
     createAudioPipeline() { throw new Error("Synthetic stream boundary"); },
@@ -85,7 +87,7 @@ test("successful downloader completion advances once despite duplicate Idle even
   const GuildMusic = guildMusicClass();
   const state = Object.create(GuildMusic.prototype);
   const track = { title: "Finished song" };
-  Object.assign(state, { current: track, streamProcess: Promise.resolve(), loop: "off" });
+  Object.assign(state, { guild: { id: "test" }, current: track, loop: "off" });
   let advanced = 0;
   state.playNext = async ended => { assert.equal(ended, track); advanced++; };
   await Promise.all([state.onTrackEnd(), state.onTrackEnd()]);

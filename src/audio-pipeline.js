@@ -21,10 +21,11 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
 }
 function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
   const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES });
-  const job = { stream, cancelled: false, error: null, downloadDone: false, outputDone: false,
+  const job = { stream, stderr: "", filterStderr: "", cancelled: false, error: null, downloadDone: false, outputDone: false,
     inputType: "webm/opus", rate: filters.nightcore ? 1.323 : 1, children: [] };
   const fail = error => {
     if (job.cancelled || job.error) return;
+    error.stderr = job.stderr || error.stderr || "";
     job.error = error;
     job.onFailure?.(error);
     if (!stream.destroyed) stream.destroy(error);
@@ -54,7 +55,11 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn) {
   const watch = (child, label, downloader = false) => {
     job.children.push(child);
     let detail = "";
-    child.stderr?.on("data", chunk => { detail = (detail + chunk).slice(-2000); });
+    child.stderr?.on("data", chunk => {
+      detail = (detail + chunk).slice(-2000);
+      if (downloader) job.stderr = detail;
+      else job.filterStderr = detail;
+    });
     for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.on("error", fail);
     child.on("error", fail);
     child.on("close", code => {

@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const storage = require("./storage");
+const { classifyStreamFailure } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
@@ -156,7 +157,7 @@ class GuildMusic {
     };
     this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
     this.player.on("stateChange", (_, next) => {
-      console.log(`[player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
+      console.log(`[${new Date().toISOString()}] [player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
       if (next.status === AudioPlayerStatus.Playing) {
         if (this.activePipeline && !this.activePipeline.startedAt) this.activePipeline.startedAt = Date.now();
         this.prepareNext();
@@ -216,7 +217,7 @@ class GuildMusic {
     connection.subscribe(this.player);
     connection.on("error", error => console.error(`[voice:${this.guild.id}] ${error.stack || error.message}`));
     connection.on("stateChange", (before, next) => {
-      console.log(`[voice:${this.guild.id}] ${before.status} -> ${next.status}`);
+      console.log(`[${new Date().toISOString()}] [voice:${this.guild.id}] ${before.status} -> ${next.status}`);
       if (shuttingDown || this.connection !== connection || this.connectPromise) return;
       if (next.status === VoiceConnectionStatus.Disconnected || next.status === VoiceConnectionStatus.Destroyed) {
         this.recoverVoice(connection).catch(error => console.error(`[voice:${this.guild.id}] Recovery failed: ${error.message}`));
@@ -456,7 +457,7 @@ class GuildMusic {
       this.resource = resource;
       this.resourcePlaybackRate = job.rate;
       resource.volume.setVolume(this.volume / 100);
-      console.log(`[stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""}`);
+      console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""}`);
       this.player.play(resource);
       scheduleMusicSave();
     } catch (error) { this.failPlayback(next, error); }
@@ -465,7 +466,9 @@ class GuildMusic {
   failPlayback(track, error) {
     if (!track || this.current !== track) return;
     if (this.isShortStream()) return this.retryShortStream(track, error);
-    console.error(`[playback:${this.guild.id}] ${error.message}`);
+    const detail = this.activePipeline?.stderr || error.stderr || error.message;
+    const reason = classifyStreamFailure(detail);
+    console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Failed track=${JSON.stringify(track.title)} reason=${reason.code}\n${detail}`);
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
     // Stop before emitting Idle, so errors cannot enter repeat or autoplay.
@@ -473,7 +476,7 @@ class GuildMusic {
     this.stop();
     this.queue = queued;
     scheduleMusicSave();
-    channel?.send(`Could not play **${track.title}**. Playback stopped; queued tracks were kept. YouTube may be blocking this host. Check the host logs and YouTube configuration before trying again.`).catch(sendError => {
+    channel?.send({ content: `Could not play **${track.title}**: ${reason.message}. Playback stopped; queued tracks were kept.`, allowedMentions: { parse: [] } }).catch(sendError => {
       console.error(`[playback:${this.guild.id}] Could not send playback error notice: ${sendError.message}`);
     });
   }
@@ -486,7 +489,9 @@ class GuildMusic {
   }
 
   retryShortStream(track, error) {
-    console.error(`[playback:${this.guild.id}] Short stream: ${error.message}`);
+    const detail = this.activePipeline?.stderr || error.stderr || error.message;
+    const reason = classifyStreamFailure(detail);
+    console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Short stream track=${JSON.stringify(track.title)} reason=${reason.code}\n${detail}`);
     const retry = track.streamRetry || 0;
     this.current = null; // Ignore Idle emitted by intentional player.stop().
     this.invalidateNext();
@@ -497,7 +502,7 @@ class GuildMusic {
     }
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
-    channel?.send("A song's audio ended unexpectedly after one retry. Trying the next queued song; check host logs if this continues.").catch(() => {});
+    channel?.send({ content: `Could not play **${track.title}** after one retry: ${reason.message}. Trying the next queued song if available.`, allowedMentions: { parse: [] } }).catch(() => {});
     this.shortStreamFailures = (this.shortStreamFailures || 0) + 1;
     // Two consecutive exhausted songs indicate a host problem: keep the rest.
     if (this.shortStreamFailures >= 2 || !this.queue.length) {
@@ -519,6 +524,7 @@ class GuildMusic {
     this.shortStreamFailures = 0;
     delete endedTrack.streamRetry;
     // Pipeline EOF already requires successful child exit; do not await anything here.
+    console.log(`[${new Date().toISOString()}] [playback:${this.guild.id}] Ended track=${JSON.stringify(endedTrack.title)} position=${playbackPosition(this).toFixed(1)}s duration=${endedTrack.duration}s`);
     this.current = null;
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
