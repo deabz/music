@@ -3,6 +3,7 @@ require("dotenv").config();
 const storage = require("./storage");
 const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
+const { musicAccessError } = require("./music-permissions");
 const { createSpotifyClient, matchSpotifyTracks } = require("./spotify");
 const ytdlp = require("youtube-dl-exec");
 const {
@@ -23,6 +24,7 @@ const { dashboardPage } = require("./dashboard-page");
 const { MAX_TRACK_DURATION_SECONDS, formatYtdlpTime, hasAllowedDuration, resolveSuggestedTrack, searchYouTube, resolvePlaylist, buildGeniusSearchUrl, youtubeCookieOptions, youtubeRuntimeOptions, prepareYouTubeCookies } = require("./music-utils");
 const {
   ActivityType,
+  ChannelType,
   Client,
   Collection,
   EmbedBuilder,
@@ -860,6 +862,8 @@ const handleCommand = async interaction => {
   }
 
   const state = getMusic(interaction.guild);
+  const accessError = musicAccessError(interaction, state);
+  if (accessError) return reply(interaction, accessError);
   try {
     if (interaction.commandName === "bassboost") {
       const enabled = !state.audioFilters.bassboost;
@@ -895,6 +899,8 @@ const handleCommand = async interaction => {
         try {
           const tracks = await resolveQuery(query);
           if (!tracks.length) throw new Error("No playable tracks were found.");
+          const accessError = musicAccessError(interaction, state);
+          if (accessError) return interaction.editReply(accessError);
           const wasPlaying = state.playing && state.current;
           await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
 
@@ -916,7 +922,7 @@ const handleCommand = async interaction => {
     if (interaction.commandName === "set-notification-channel") {
       const channel = interaction.options.getChannel("channel", true);
 
-      if (!channel) return reply(interaction, "Invalid channel provided.");
+      if (!channel || ![ChannelType.GuildText, ChannelType.GuildAnnouncement].includes(channel.type)) return reply(interaction, "Choose a text or announcement channel.");
       if (!channel.permissionsFor(interaction.guild.members.me).has(PermissionFlagsBits.SendMessages)) {
         return reply(interaction, `I don't have permission to send messages in ${channel}. Please check my permissions.`);
       }
@@ -1083,6 +1089,8 @@ const handleCommand = async interaction => {
             const memberChannel = i.member.voice?.channel;
             if (!memberChannel) return await i.reply({ content: "Join a voice channel first.", ephemeral: true });
 
+            const accessError = musicAccessError(i, state, "play");
+            if (accessError) return await i.reply({ content: accessError, ephemeral: true });
             await i.deferUpdate();
             await state.add([track], memberChannel, i.user.id, i.channel);
             await i.editReply({ content: `Added **${track.title}** to the queue!`, components: [] });

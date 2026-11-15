@@ -2,6 +2,7 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  ChannelType,
   EmbedBuilder,
   PermissionFlagsBits,
   SlashCommandBuilder
@@ -46,7 +47,8 @@ const commands = [
     .addStringOption(o => o.setName("query").setDescription("Song name").setRequired(true)),
   new SlashCommandBuilder().setName("stats").setDescription("Show bot statistics."),
   new SlashCommandBuilder().setName("set-notification-channel").setDescription("Set the channel for music notifications.")
-    .addChannelOption(o => o.setName("channel").setDescription("Channel").setRequired(true)),
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+    .addChannelOption(o => o.setName("channel").setDescription("Channel").addChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setRequired(true)),
   new SlashCommandBuilder().setName("join").setDescription("Connect to the voice channel you are currently in."),
   new SlashCommandBuilder().setName("247").setDescription("Connect to the configured voice channel and stay connected.")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString()),

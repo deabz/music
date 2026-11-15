@@ -31,6 +31,8 @@ function commandHandler(state, overrides = {}) {
   const end = source.indexOf("\nclient.on(Events.VoiceStateUpdate", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nhandleCommand;`, {
     getMusic: () => state,
+    musicAccessError: () => null,
+    ChannelType: require("discord.js").ChannelType,
     reply: (interaction, content) => interaction.reply(content),
     formatDuration,
     playbackPosition: require("../src/playback-position").playbackPosition,
@@ -282,7 +284,7 @@ test("every registered slash command dispatches and responds with valid argument
       setVolume(value) { this.volume = value; }, adjustVolume(value) { this.volume += value; },
       moveTrack: () => true, clearQueue() { this.queue = []; }
     };
-    const channel = { id: "text", permissionsFor: () => ({ has: () => true }) };
+    const channel = { id: "text", type: 0, permissionsFor: () => ({ has: () => true }) };
     const interaction = {
       commandName: command.name,
       guild: { channels: { fetch: async () => channel }, members: { me: {} } },
