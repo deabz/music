@@ -52,3 +52,35 @@ test('negative cache expires; network failures and timeouts are not cached', asy
   const timeout = createLyricsService({ timeoutMs: 5, request: async (_, options) => { signal = options.signal; return new Promise(() => {}); } });
   assert.equal((await timeout.lookup('absent song')).found, false); assert.equal(signal.aborted, true);
 });
+test('title-only fallback follows empty artist search; typed artist/title uses exact lookup', async () => {
+  const calls = [];
+  const service = createLyricsService({ request: async url => {
+    calls.push(new URL(url));
+    if (url.includes('/api/get?')) return response(null, 404);
+    return response(calls.length === 3 ? [record()] : []);
+  } });
+  assert.equal((await service.lookup({ title: 'Ellie Goulding - Burn', duration: 231 })).found, true);
+  assert.deepEqual(calls.map(url => url.pathname), ['/api/get', '/api/search', '/api/search']);
+  assert.equal(calls[2].searchParams.get('q'), 'Burn');
+  let exact;
+  const typed = createLyricsService({ request: async url => { exact = new URL(url); return response(record()); } });
+  await typed.lookup('Ellie Goulding - Burn (Official Video)');
+  assert.equal(exact.pathname, '/api/get'); assert.equal(exact.searchParams.get('track_name'), 'Burn');
+  assert.equal(exact.searchParams.has('duration'), false);
+});
+test('cache has 100-entry LRU bound, shares in-flight queries, and returns defensive copies', async () => {
+  let calls = 0;
+  const service = createLyricsService({ request: async url => { calls++; const q = new URL(url).searchParams.get('q'); return response([record({ trackName: q })]); } });
+  const [first, second] = await Promise.all([service.lookup('song 0'), service.lookup('song 0')]);
+  assert.equal(calls, 1); first.text = 'Changed'; assert.notEqual(second.text, first.text);
+  for (let index = 1; index <= 100; index++) await service.lookup(`song ${index}`);
+  await service.lookup('song 0'); assert.equal(calls, 102);
+});
+test('malformed data and HTTP failures are unavailable and not negatively cached', async () => {
+  for (const result of [response(null), response({}, 429), { ok: true, status: 200, json: async () => { throw new Error('invalid JSON'); } }]) {
+    let calls = 0;
+    const service = createLyricsService({ request: async () => { calls++; return result; } });
+    assert.equal((await service.lookup('unknown song')).found, false);
+    await service.lookup('unknown song'); assert.equal(calls, 2);
+  }
+});

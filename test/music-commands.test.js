@@ -677,6 +677,24 @@ test("global interaction listener routes persistent controls before slash dispat
   await handler({}); assert.equal(calls, 1);
 });
 
+test("global listener routes lyrics modal before panel or slash handlers", async () => {
+  const handler = eventHandler("InteractionCreate", { lyrics: { handleModal: async interaction => { assert.equal(interaction.customId, "lyrics:modal"); return true; } },
+    handlePanelInteraction: () => assert.fail("Modal must be handled first"), handleCommand: () => assert.fail("Modal is not a slash command") });
+  await handler({ customId: "lyrics:modal" });
+});
+
+test("actual slash handler passes the playing track and optional song to shared lyrics controller", async () => {
+  const state = { current: { title: "Current" } };
+  for (const song of [null, "Artist - Typed"]) {
+    let options;
+    const handler = commandHandler(state, { lyrics: { open: async (_, value) => { options = value; } } });
+    await handler({ guild: {}, commandName: "lyrics", options: { getString: name => { assert.equal(name, "song"); return song; } } });
+    assert.equal(options.track, state.current); assert.equal(options.song, song);
+  }
+  const definition = commands.find(command => command.name === "lyrics");
+  assert.equal(definition.options[0].name, "song"); assert.ok(!definition.options[0].required);
+});
+
 
 test("play uses the same panel and publishes safe singular/plural confirmations while processing privately", async () => {
   for (const count of [1, 3]) {

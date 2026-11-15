@@ -157,3 +157,14 @@ Lyrics may be missing; a Genius search link is offered when no match is found.
 Long lyrics have invoker-only Previous/Next buttons lasting 10 minutes (10 pages
 maximum). Lookups have a per-user 5-second cooldown. Lyrics are cached only in
 memory (100 entries; missing results expire after 10 minutes), never saved to disk.
+
+Slash-command results are visible in the channel. The panel mic button and its
+popup results are private to the clicking user. Neither requires joining voice.
+Titles and artists are cleaned before matching. Search candidates need at least
+80% token similarity for the title and known artist; duration differences within
+5 seconds receive preference. Differences exceeding 30 seconds or 25% of the
+known duration (whichever is larger) are rejected. Ambiguous matches can still be
+wrong; use `Artist - Title` to improve matching. Each request times out after
+8 seconds; network failures are not cached. Display uses whole lines, about 3500
+escaped characters per page. A single line exceeding that size is omitted with
+a truncation notice rather than cut in half.

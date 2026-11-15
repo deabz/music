@@ -33,7 +33,6 @@ const {
   ChannelType,
   Client,
   Collection,
-  EmbedBuilder,
   Events,
   GatewayIntentBits,
   PermissionFlagsBits,

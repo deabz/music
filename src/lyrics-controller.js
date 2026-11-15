@@ -54,8 +54,8 @@ function createLyricsController({ service = createLyricsService(), now = Date.no
         filter: button => ['lyrics:previous', 'lyrics:next'].includes(button.customId) });
       collector.on('collect', button => {
         if (button.user.id !== interaction.user.id) { void privateReply(button, 'These pages belong to another user.').catch(() => {}); return; }
-        const acknowledged = button.deferUpdate();
-        chain = chain.then(async () => { await acknowledged; page = Math.max(0, Math.min(pages.length - 1, page + (button.customId === 'lyrics:next' ? 1 : -1))); await button.editReply(lyricsPayload(result, pages, page)); })
+        const acknowledged = button.deferUpdate().then(() => true, () => false);
+        chain = chain.then(async () => { if (!await acknowledged) return; page = Math.max(0, Math.min(pages.length - 1, page + (button.customId === 'lyrics:next' ? 1 : -1))); await button.editReply(lyricsPayload(result, pages, page)); })
           .catch(() => log('[lyrics] Could not update lyrics pagination.'));
       });
       collector.on('end', () => { chain = chain.then(() => interaction.editReply({ components: [] })).catch(() => log('[lyrics] Could not remove expired page controls.')); });

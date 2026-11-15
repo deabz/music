@@ -56,4 +56,18 @@ test('pagination is invoker-only, lasts ten minutes, navigates and removes contr
   f.collector.emit('end'); await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(f.calls.at(-1)[1].components, []);
 });
-module.exports = { fixture };
+
+test('overlong lines are omitted with a notice rather than cut; short pages retain blank lines', () => {
+  const pages = splitLyrics('First\n\nSecond'); assert.deepEqual(pages, ['First\n\nSecond']);
+  const overlong = splitLyrics('A'.repeat(4000) + '\nShort line');
+  assert.match(overlong[0], /Short line/); assert.match(overlong[0], /truncated/); assert.ok(!overlong[0].includes('AAAA'));
+});
+
+test('lookup and Discord failures log no error payload or lyrics', async () => {
+  const logs = [];
+  const f = fixture();
+  const controller = createLyricsController({ log: message => logs.push(message), service: { lookup: async () => { throw new Error('PRIVATE_LYRIC_TEXT'); } } });
+  await controller.open(f.interaction, { song: 'Test song' });
+  assert.ok(!JSON.stringify(logs).includes('PRIVATE_LYRIC_TEXT'));
+  assert.match(f.calls.at(-1)[1].content, /unavailable/);
+});
