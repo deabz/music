@@ -52,23 +52,33 @@ const BUTTONS = [
 function buildPlayerPanel(state, { avatarUrl } = {}) {
   const queue = state.queue || [];
   const tracks = [...(state.current ? [state.current] : []), ...queue];
-  const lines = state.current
-    ? [`${trackLink(state.current)} - [\`${duration(state.current.duration)}\`],`, `*Requested by -* ${requester(state.current)}`]
+  const embedTitle = `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"} in queue`;
+  const footerText = `Volume: ${short(String(state.volume ?? 80), 32)}`;
+  const descriptionBudget = Math.min(4096, 6000 - embedTitle.length - footerText.length);
+  const currentLines = titleBudget => state.current
+    ? [`${trackLink(state.current, titleBudget)} - [\`${duration(state.current.duration)}\`],`, `*Requested by -* ${requester(state.current)}`]
     : ["Nothing is playing."];
+  let lines = currentLines(Infinity);
+  if (lines.join("\n").length > descriptionBudget) {
+    const overhead = currentLines(0).join("\n").length;
+    lines = currentLines(Math.max(1, descriptionBudget - overhead));
+  }
   let shown = 0;
   if (queue.length) {
     lines.push("", "**Up Next:**");
     for (const track of queue.slice(0, 10)) {
       const title = formatTrackTitle(track.title);
       const line = `\`${shown + 1}.\` **${title}** \u2014 [\`${duration(track.duration)}\`] \u2014 ${requester(track)}`;
-      if ([...lines, line].join("\n").length > 3900) break;
+      const remaining = queue.length - shown - 1;
+      const reserved = remaining ? `\n...and ${remaining} more`.length : 0;
+      if ([...lines, line].join("\n").length + reserved > descriptionBudget) break;
       lines.push(line); shown++;
     }
     if (queue.length > shown) lines.push(`...and ${queue.length - shown} more`);
   }
-  const embed = { title: `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"} in queue`,
+  const embed = { title: embedTitle,
     description: lines.join("\n"), color: 0xE6B655,
-    footer: { text: `Volume: ${state.volume ?? 80}`, ...(avatarUrl ? { icon_url: avatarUrl } : {}) } };
+    footer: { text: footerText, ...(avatarUrl ? { icon_url: avatarUrl } : {}) } };
   const suggestions = (state.panelSuggestions || []).slice(0, Math.min(25, PANEL_SUGGESTION_COUNT));
   const options = suggestions.length ? suggestions.map(item => ({ label: short(item.title, 100),
     description: short(item.channel?.name || item.author || "Unknown channel", 100 - ` - youtube - ${duration(item.duration)}`.length)
