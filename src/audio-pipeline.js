@@ -23,12 +23,14 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
 function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, probe = demuxProbe) {
   const stream = new PassThrough({ highWaterMark: PREFETCH_BYTES });
   const job = { stream, stderr: "", filterStderr: "", cancelled: false, intentionallyAborted: false, error: null, downloadDone: false, outputDone: false,
-    inputType: null, formatReady: false, rate: filters.nightcore ? 1.323 : 1, children: [] };
+    inputType: null, formatReady: false, rate: filters.nightcore ? 1.323 : 1, children: [],
+    filters: { ...filters }, offset, exits: {}, commands: [], diagnosticSecrets: [] };
   job.ready = new Promise(resolve => { job.resolveReady = resolve; });
   job.sourceStreams = new Set();
-  const fail = error => {
+  const fail = (error, stage = "player") => {
     if (job.cancelled || job.error) return;
     error.stderr = job.stderr || error.stderr || "";
+    error.stage ||= stage;
     if (job.shouldIgnoreFailure?.(error)) {
       job.ignoredPipe = true;
       job.sourceEnded = true;
@@ -42,7 +44,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     job.cancel("failure");
   };
   // Keep errors handled even before a prefetched stream has a player subscriber.
-  stream.on("error", fail);
+  stream.on("error", error => fail(error));
   stream.on("finish", () => { job.outputDone = true; });
   job.cancel = (reason = "intentional") => {
     if (job.cancelled) return;
@@ -67,6 +69,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     source.pipe(stream, { end: false });
   };
   const watch = (child, label, downloader = false) => {
+    const stage = downloader ? "extract" : "ffmpeg";
     job.children.push(child);
     let detail = "";
     child.stderr?.on("data", chunk => {
@@ -74,12 +77,13 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       if (downloader) job.stderr = detail;
       else job.filterStderr = detail;
     });
-    for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.on("error", fail);
-    child.on("error", fail);
-    child.on("close", code => {
+    for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.on("error", error => fail(error, stage));
+    child.on("error", error => fail(error, stage));
+    child.on("close", (code, signal) => {
       child.pipelineClosed = true;
+      job.exits[stage] = { code, signal: signal || null };
       if (downloader) job.downloadDone = true;
-      if (code !== 0) fail(new Error(detail.trim() || `${label} exited with code ${code}.`));
+      if (code !== 0) fail(new Error(detail.trim() || `${label} exited with code ${code}.`), stage);
       finish();
     });
     return child;
@@ -89,6 +93,8 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       noWarnings: true, quiet: true, ...youtubeCookieOptions(), ...youtubeRuntimeOptions(),
       ffmpegLocation: ffmpeg,
       ...(offset > 0 ? { downloadSections: `*${formatYtdlpTime(offset)}-inf` } : {}) };
+    job.diagnosticSecrets = [options.cookies].filter(Boolean);
+    job.commands.push({ stage: "extract", executable: ytdlp.constants.YOUTUBE_DL_PATH, args: [...ytdlp.args(options), "--", track.url] });
     // Native spawn avoids tinyspawn's unbounded duplicate stdout collection.
     const download = watch(launch(ytdlp.constants.YOUTUBE_DL_PATH,
       [...ytdlp.args(options), "--", track.url], { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] }), "yt-dlp", true);
@@ -98,17 +104,22 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     Promise.resolve(probe(download.stdout, 8192)).then(({ stream: source, type }) => {
       if (job.cancelled) { source.destroy(); return; }
       job.sourceStreams.add(source);
-      source.on("error", fail);
+      source.on("error", error => fail(error, "probe"));
       const effects = [];
       if (filters.bassboost) effects.push("bass=g=10");
       if (filters.eightd) effects.push("apulsator=hz=0.1");
       if (filters.nightcore) effects.push("asetrate=44100*1.2,atempo=1.2");
       if (filters.echo) effects.push("aecho=0.8:0.88:60:0.4");
       if (effects.length || type !== StreamType.WebmOpus) {
-        const filter = watch(launch(ffmpeg, ["-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+        const args = ["-hide_banner", "-loglevel", "error", "-i", "pipe:0",
           ...(effects.length ? ["-af", effects.join(",")] : []),
-          "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"],
-        { windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] }), "FFmpeg");
+          "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1"];
+        job.commands.push({ stage: "ffmpeg", executable: ffmpeg, args });
+        let child;
+        try { child = launch(ffmpeg, args,
+          { windowsHide: true, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] }); }
+        catch (error) { fail(error, "ffmpeg"); return; }
+        const filter = watch(child, "FFmpeg");
         job.inputType = StreamType.Raw;
         source.pipe(filter.stdin);
         output(filter.stdout);
@@ -118,8 +129,8 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       }
       job.formatReady = true;
       job.resolveReady();
-    }).catch(fail);
-  } catch (error) { fail(error); job.cancel(); }
+    }).catch(error => fail(error, "probe"));
+  } catch (error) { fail(error, "extract"); job.cancel(); }
   return job;
 }
 module.exports = { createAudioPipeline, PREFETCH_BYTES, terminateChild };

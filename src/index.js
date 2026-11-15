@@ -8,7 +8,7 @@ const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
 const { createPlayerPanel, buildPlayConfirmation } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
-const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
+const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS, streamFailureDiagnostic } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
 const { parseTransitionSettings, shouldFadeIn, TransitionController, NATURAL_HANDOVER_GRACE_MS } = require("./transitions");
@@ -546,12 +546,12 @@ class GuildMusic {
 
   failPlayback(track, error) {
     if (!track || this.current !== track) return;
+    console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
     const detail = this.activePipeline?.stderr || error.stderr || error.message;
     const reason = classifyStreamFailure(detail);
     if (reason.code === "403" && !track.http403Retries) {
       const position = playbackPosition(this);
       const wasPaused = this.player.state.status === AudioPlayerStatus.Paused || this.pauseOnRestore;
-      console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Retry 403 once track=${JSON.stringify(track.title)}\n${detail}`);
       this.current = null;
       this.invalidateNext();
       this.cancelActive();
@@ -559,7 +559,6 @@ class GuildMusic {
       this.pauseOnRestore = wasPaused;
       return this.playNext(null, { ...track, http403Retries: 1, resumeAtSeconds: position });
     }
-    console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Failed track=${JSON.stringify(track.title)} reason=${reason.code}\n${detail}`);
     const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
       || this.guild.client.channels.cache.get(this.guild.systemChannelId);
     // Stop before emitting Idle, so errors cannot enter repeat or autoplay.
@@ -580,9 +579,9 @@ class GuildMusic {
   }
 
   retryShortStream(track, error) {
+    console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
     const detail = this.activePipeline?.stderr || error.stderr || error.message;
     const reason = classifyStreamFailure(detail);
-    console.error(`[${new Date().toISOString()}] [playback:${this.guild.id}] Short stream track=${JSON.stringify(track.title)} reason=${reason.code}\n${detail}`);
     const retry = track.streamRetry || 0;
     this.current = null; // Ignore Idle emitted by intentional player.stop().
     this.invalidateNext();
