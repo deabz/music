@@ -377,9 +377,9 @@ class GuildMusic {
     if (this.current) this.prepareNext(false);
   }
 
-  prepareNext(allowSuggestion = true) {
-    if (!this.current || !this.playing) return;
-    const track = this.loop === "track" ? this.current : this.queue[0]
+  prepareNext(allowSuggestion = true, sourceTrack = this.current) {
+    if (!sourceTrack) return;
+    const track = this.loop === "track" && this.current ? this.current : this.queue[0]
       || (this.loop === "queue" ? this.current : null);
     if (track) {
       if (this.prefetch?.track === track) return;
@@ -392,15 +392,16 @@ class GuildMusic {
     if (!allowSuggestion || this.suggestionGeneration === this.nextGeneration) return;
     const generation = this.nextGeneration;
     this.suggestionGeneration = generation;
-    const current = this.current;
+    const current = sourceTrack;
     resolveSuggestedTrack(current, this.autoplayTriedUrls,
       (query, options) => searchYouTube(query, options.limit), artworkFrom)
       .then(suggestion => {
-        if (!suggestion || generation !== this.nextGeneration || this.current !== current || this.queue.length) return;
+        if (!suggestion || generation !== this.nextGeneration || (this.current && this.current !== current) || this.queue.length) return;
         this.autoplayTriedUrls.add(suggestion.url);
         this.queue.push(suggestion);
         scheduleMusicSave();
-        this.prepareNext(false);
+        if (!this.current) this.playNext();
+        else this.prepareNext(false);
       }).catch(error => console.error(`[autoplay:${this.guild.id}] ${error.message}`));
   }
 
@@ -418,7 +419,7 @@ class GuildMusic {
     const next = trackToPlay || this.queue.shift();
     const prepared = !trackToPlay && this.prefetch?.track === next ? this.prefetch.job : null;
     if (prepared) this.prefetch = null;
-    this.invalidateNext();
+    if (next) this.invalidateNext();
     this.cancelActive();
     if (!next) {
       this.current = null;
@@ -512,6 +513,19 @@ class GuildMusic {
     if (this.loop === "track") this.queue.unshift(endedTrack);
     else if (this.loop === "queue") this.queue.push(endedTrack);
     await this.playNext(endedTrack);
+  }
+
+  async skip() {
+    const skipped = this.current;
+    if (!skipped) return false;
+    this.current = null;
+    this.invalidateNext();
+    this.cancelActive();
+    this.player.stop(true);
+    if (this.loop === "queue") this.queue.push(skipped);
+    await this.playNext();
+    if (!this.current) this.prepareNext(true, skipped);
+    return true;
   }
 
   stop() {
@@ -1067,8 +1081,8 @@ const handleCommand = async interaction => {
       return interaction.editReply(`Forwarded to ${formatDuration(state.resumeOffsetSeconds)}.`);
     }
     if (interaction.commandName === "skip") {
-      state.invalidateNext();
-      state.player.stop(); return reply(interaction, "Skipped the current track.");
+      const skipped = await state.skip();
+      return reply(interaction, skipped ? "Skipped the current track." : "Nothing is playing.");
     }
     if (interaction.commandName === "stop") {
       state.stop(); return reply(interaction, "Playback stopped and the queue was cleared.");
@@ -1324,8 +1338,7 @@ async function controlDashboard(payload) {
     if (!await state.resumePlayback("dashboard")) throw dashboardError("Playback is not paused.");
   } else if (action === "skip") {
     if (!state.current) throw dashboardError("Nothing is playing.");
-    state.invalidateNext();
-    state.player.stop();
+    await state.skip();
   } else if (action === "stop") {
     state.stop();
   } else if (action === "seek") {

@@ -276,6 +276,7 @@ test("every registered slash command dispatches and responds with valid argument
       async connect() { effects.push("connect"); },
       async pausePlayback() { return true; }, async resumePlayback() { return true; },
       async seek(value) { this.resumeOffsetSeconds = value; },
+      skip: async () => { effects.push("skip"); return true; },
       stop: () => effects.push("stop"), disconnect: () => effects.push("disconnect"),
       shuffle: () => 2,
       setVolume(value) { this.volume = value; }, adjustVolume(value) { this.volume += value; },
@@ -451,4 +452,38 @@ test("failed reconnect clears destroyed connection, tries twice and preserves cu
   assert.equal(state.connection, null); assert.equal(state.current, null);
   assert.equal(state.queue[0].resumeAtSeconds, 42);
   assert.equal(state.playing, false);
+});
+
+
+test("dedicated skip cancels immediately, bypasses track loop, and rotates queue loop", async () => {
+  for (const loop of ["off", "track", "queue"]) {
+    const GuildMusic = guildMusicClass();
+    const state = Object.create(GuildMusic.prototype);
+    const current = { title: "current" }, next = { title: "next" };
+    const events = [];
+    Object.assign(state, { current, queue: [next], loop,
+      activePipeline: { cancel() { events.push("kill"); } },
+      prefetch: { job: { cancel() { events.push("cancel prefetch"); } } },
+      player: { stop() { events.push("stop"); state.onTrackEnd(); } },
+      playNext: async () => { events.push("next"); state.current = state.queue.shift(); } });
+    await state.skip();
+    assert.deepEqual(events, ["cancel prefetch", "kill", "stop", "next"]);
+    assert.equal(state.current, next);
+    assert.equal(state.queue.length, loop === "queue" ? 1 : 0);
+    if (loop === "queue") assert.equal(state.queue[0], current);
+  }
+});
+
+test("skipping last track schedules cancellable autoplay without waiting", async () => {
+  let resolve;
+  const GuildMusic = guildMusicClass({ resolveSuggestedTrack: () => new Promise(r => { resolve = r; }), searchYouTube() {}, artworkFrom() {} });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { current: { title: "last" }, queue: [], loop: "off", autoplayTriedUrls: new Set(),
+    player: { stop() {} }, playNext: async () => {} });
+  assert.equal(await state.skip(), true);
+  assert.equal(typeof resolve, "function");
+  state.stop();
+  resolve({ title: "late", url: "late" });
+  await new Promise(setImmediate);
+  assert.equal(state.queue.length, 0);
 });
