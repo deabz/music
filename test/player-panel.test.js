@@ -9,8 +9,8 @@ test("panel renders plain linked titles, matching queue numbers, counts, request
   assert.equal(embed.title, "2 tracks in queue");
   assert.ok(embed.description.startsWith("["));
   assert.match(embed.description, /A{49}\u2026\]\(https:/);
-  assert.match(embed.description, /1\. \[Waiting\]/);
-  assert.match(embed.description, /`02:05`, \*Requested by -\* <@12345678901234567>/);
+  assert.match(embed.description, /`1\.` \*\*Waiting\*\*/);
+  assert.match(embed.description, /\[`02:05`\],\n\*Requested by -\* <@12345678901234567>/);
   assert.deepEqual(embed.footer, { text: "Volume: 90", icon_url: "https://example.com/bot.png" });
   assert.equal(buildPlayerPanel({ ...state, queue: [] }).embeds[0].title, "1 track in queue");
   const autoplay = buildPlayerPanel({ ...state, current: { ...track(), autoSuggested: true }, queue: [] });
@@ -19,7 +19,7 @@ test("panel renders plain linked titles, matching queue numbers, counts, request
 test("panel stays below embed/component limits, truncates safely and disables idle controls", () => {
   const state = { current: track("[test](url)*"), queue: Array.from({ length: 30 }, () => track()), loop: "track", volume: 80 };
   const payload = buildPlayerPanel(state);
-  assert.match(payload.embeds[0].description, /\.\.\.and 21 more/);
+  assert.match(payload.embeds[0].description, /\.\.\.and 20 more/);
   assert.ok(payload.embeds[0].description.length <= 4096);
   assert.equal(payload.components.length, 4);
   const ids = payload.components.flatMap(row => row.components.map(item => item.custom_id));
@@ -102,4 +102,29 @@ test("Discord builders accept the component payload and Unicode text obeys code-
   for (const row of payload.components) assert.doesNotThrow(() => new ActionRowBuilder(row).toJSON());
   assert.ok(payload.components[0].components[0].options[0].label.length <= 100);
   assert.ok(payload.components[0].components[0].options[0].description.length <= 100);
+});
+
+
+test("reference embed separates the current requester from unlinked numbered waiting tracks", () => {
+  const single = buildPlayerPanel({ current: track("Current"), queue: [], loop: "off", volume: 70 }).embeds[0];
+  assert.equal(single.description, "[Current](https://youtube.com/watch?v=abc) - [`02:05`],\n*Requested by -* <@12345678901234567>");
+  assert.ok(!single.description.includes("Up Next"));
+  const many = buildPlayerPanel({ current: { ...track("Current"), autoSuggested: true }, queue: [track("Waiting"), { ...track("Automatic"), autoSuggested: true }], loop: "off" });
+  assert.match(many.embeds[0].description, /Requested by -\* Autoplay\n\n\*\*Up Next:\*\*/);
+  assert.ok(many.embeds[0].description.includes("`1.` **Waiting** \u2014 [`02:05`] \u2014 <@12345678901234567>"));
+  assert.ok(many.embeds[0].description.includes("`2.` **Automatic** \u2014 [`02:05`] \u2014 Autoplay"));
+  assert.ok(!many.embeds[0].description.includes("[Waiting]("));
+  assert.deepEqual(many.allowedMentions, { parse: [], users: [], roles: [], repliedUser: false });
+});
+
+test("waiting titles truncate at forty characters and hostile markdown/mentions remain inert", () => {
+  const state = { current: track("[Fake](bad)* @everyone <@&12345678901234567>"),
+    queue: [track("A".repeat(100)), track("**bold** @here <@12345678901234567>")], loop: "off" };
+  const payload = buildPlayerPanel(state);
+  const text = payload.embeds[0].description;
+  assert.ok(text.includes("A".repeat(39) + "\u2026"));
+  assert.ok(text.includes("\\[Fake\\]\\(bad\\)\\*"));
+  assert.ok(!text.includes("@everyone")); assert.ok(!text.includes("@here"));
+  assert.ok(text.length <= 4096);
+  assert.equal(payload.allowedMentions.parse.length, 0);
 });

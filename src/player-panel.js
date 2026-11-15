@@ -8,8 +8,9 @@ const short = (value, limit) => {
   return result + "\u2026";
 };
 const markdown = value => String(value).replace(/[\\[\]()*_~`|]/g, "\\$&");
+const escapePanelText = value => markdown(value).replace(/@(?=everyone\b|here\b|[!&]?\d+)/gi, "@\u200b");
 function trackLink(track) {
-  const title = markdown(short(track.title, 50));
+  const title = escapePanelText(short(track.title, 50));
   try {
     const url = new URL(track.url);
     if (!["http:", "https:"].includes(url.protocol) || url.href.length > 600) return title;
@@ -36,15 +37,20 @@ const BUTTONS = [
 function buildPlayerPanel(state, { avatarUrl } = {}) {
   const queue = state.queue || [];
   const tracks = [...(state.current ? [state.current] : []), ...queue];
-  const lines = state.current ? [] : ["Nothing is playing."];
+  const lines = state.current
+    ? [`${trackLink(state.current)} - [\`${duration(state.current.duration)}\`],`, `*Requested by -* ${requester(state.current)}`]
+    : ["Nothing is playing."];
   let shown = 0;
-  for (const track of tracks.slice(0, 10)) {
-    const position = state.current && shown === 0 ? "" : `${shown + (state.current ? 0 : 1)}. `;
-    const line = `${position}${trackLink(track)} - \`${duration(track.duration)}\`, *Requested by -* ${requester(track)}`;
-    if ([...lines, line].join("\n").length > 3900) break;
-    lines.push(line); shown++;
+  if (queue.length) {
+    lines.push("", "**Up Next:**");
+    for (const track of queue.slice(0, 10)) {
+      const title = escapePanelText(short(track.title, 40));
+      const line = `\`${shown + 1}.\` **${title}** \u2014 [\`${duration(track.duration)}\`] \u2014 ${requester(track)}`;
+      if ([...lines, line].join("\n").length > 3900) break;
+      lines.push(line); shown++;
+    }
+    if (queue.length > shown) lines.push(`...and ${queue.length - shown} more`);
   }
-  if (tracks.length > shown) lines.push(`...and ${tracks.length - shown} more`);
   const embed = { title: `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"} in queue`,
     description: lines.join("\n"), color: 0xE6B655,
     footer: { text: `Volume: ${state.volume ?? 80}`, ...(avatarUrl ? { icon_url: avatarUrl } : {}) } };
@@ -65,7 +71,7 @@ function buildPlayerPanel(state, { avatarUrl } = {}) {
     return { type: 2, custom_id: PANEL_PREFIX + action, label, style: action === "loop" && state.loop !== "off" ? 3 : 2,
       emoji: { name: action === "loop" && state.loop === "track" ? "\uD83D\uDD02" : emoji }, disabled };
   }) });
-  return { embeds: [embed], components, allowedMentions: { parse: [] } };
+  return { embeds: [embed], components, allowedMentions: { parse: [], users: [], roles: [], repliedUser: false } };
 }
 
 class PlayerPanel {
@@ -186,4 +192,4 @@ function buildFavouritesMenu(tracks, userId) {
     options: tracks.slice(0, 25).map(track => ({ value: track.id, label: short(track.title, 100),
       description: short(`${track.author} - ${duration(track.duration)}`, 100) })) }] }];
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, PANEL_PREFIX, short };
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, PANEL_PREFIX, short, escapePanelText };
