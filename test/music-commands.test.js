@@ -246,6 +246,87 @@ test("clean early EOF resumes at delivered position; short-stream detection uses
   short.state.stop();
 });
 
+test("abnormal early endings resume twice at delivered positions without advancing queue or failed-song count", async () => {
+  const f = transitionFixture(); f.state.shortStreamFailures = 1;
+  const waiting = f.state.queue[0];
+  f.state.resource.playbackDuration = 20000;
+  const first = f.state.onTrackEnd(); const duplicate = f.state.onTrackEnd();
+  await Promise.all([first, duplicate]);
+  assert.equal(f.state.resumeOffsetSeconds, 20); assert.equal(f.state.current.earlyResumes, 1);
+  assert.equal(f.jobs.length, 1);
+  f.state.resource.playbackDuration = 5000;
+  await f.state.onTrackEnd(); assert.equal(f.state.resumeOffsetSeconds, 25);
+  assert.equal(f.state.current.earlyResumes, 2); assert.equal(f.state.shortStreamFailures, 1);
+  assert.equal(f.state.queue[0], waiting);
+  f.state.guild.client = { channels: { cache: new Map() } };
+  f.state.resource.playbackDuration = 5000;
+  await f.state.onTrackEnd(); assert.equal(f.jobs.length, 2);
+  assert.equal(f.state.current, null); assert.equal(f.state.queue[0], waiting);
+});
+
+test("intentional abort and permanent stream failures cannot trigger early resumes", async () => {
+  for (const reason of ["intentional", "This video is private", "Sign in to confirm your age", "Requested format is not available"]) {
+    const f = transitionFixture(); f.state.resource.playbackDuration = 20000;
+    f.state.guild.client = { channels: { cache: new Map() } };
+    if (reason === "intentional") {
+      f.state.activePipeline = { intentionallyAborted: true }; await f.state.onTrackEnd();
+      assert.equal(f.state.current.title, "Current");
+    } else await f.state.failPlayback(f.state.current, new Error(reason));
+    assert.equal(f.jobs.length, 0); f.state.stop();
+  }
+});
+
+test("stop during automatic resume probing cancels the pending start", async () => {
+  let release;
+  const f = transitionFixture({ jobReady: new Promise(resolve => { release = resolve; }) });
+  f.state.resource.playbackDuration = 20000;
+  const pending = f.state.onTrackEnd(); await new Promise(setImmediate);
+  assert.equal(f.state.restartTransaction != null, true);
+  f.state.stop(); release(); await pending;
+  assert.equal(f.starts.length, 0); assert.equal(f.state.current, null); assert.equal(f.state.earlyResumePromise, null);
+});
+
+test("late failure callback from replaced generation cannot stop new effects stream", async () => {
+  const f = transitionFixture(); await f.state.seek(20);
+  const oldJob = f.state.activePipeline, oldResource = f.state.resource;
+  await f.state.setAudioFilters(["nightcore"]);
+  const fresh = f.state.resource;
+  oldJob.onFailure(new Error("late failure")); await f.state.onTrackEnd(oldResource);
+  assert.equal(f.state.resource, fresh); assert.equal(f.state.playing, true);
+  assert.notEqual(oldJob.playbackGeneration, f.state.activePipeline.playbackGeneration); f.state.stop();
+});
+
+test("effects enabled while idle are retained for the first track with no extra restart", async () => {
+  const f = transitionFixture(); f.state.stop();
+  await f.state.setAudioFilters(["bassboost", "echo"]);
+  f.state.queue.push({ title: "First", url: "first", duration: 100 }); await f.state.playNext();
+  assert.equal(f.state.audioFilters.bassboost, true); assert.equal(f.state.audioFilters.echo, true);
+  assert.equal(f.starts.length, 1); f.state.stop();
+});
+
+test("a replacement waits for old process-tree termination and stop invalidates that wait", async () => {
+  for (const stop of [false, true]) {
+    const f = transitionFixture(); let release;
+    f.state.activePipeline = { cancel() { this.termination = new Promise(resolve => { release = resolve; }); } };
+    const pending = f.state.seek(20); await new Promise(setImmediate);
+    assert.equal(f.jobs.length, 0);
+    if (stop) f.state.stop(); release(); await pending;
+    assert.equal(f.starts.length, stop ? 0 : 1); f.state.stop();
+  }
+});
+
+test("each pipeline end produces one summary even when cancellation follows Idle", () => {
+  const logs = [];
+  const GuildMusic = guildMusicClass({ console: { log: value => logs.push(value), error() {} } });
+  const state = Object.assign(Object.create(GuildMusic.prototype), {
+    guild: { id: "guild" }, current: { title: "Track", duration: 100 }, resource: { playbackDuration: 20000 },
+    activePipeline: { playbackGeneration: 4, offset: 10, rate: 1, cancel() {} }
+  });
+  state.recordStreamEnd("early end"); state.cancelActive();
+  assert.equal(logs.length, 1); const log = JSON.parse(logs[0].slice("[stream-end] ".length));
+  assert.equal(log.reason, "early end"); assert.equal(log.positionSeconds, 30); assert.equal(log.generation, 4);
+});
+
 test("resource cleanup, stop, disconnect and fatal playback errors release transition timers", async () => {
   for (const action of ["cancelActive", "stop", "disconnect", "error"]) {
     const f = transitionFixture(); assert.equal(f.timers.size, 1);

@@ -3,7 +3,7 @@ const { PassThrough } = require("node:stream");
 const { demuxProbe, StreamType } = require("@discordjs/voice");
 const ytdlp = require("youtube-dl-exec");
 const ffmpeg = require("ffmpeg-static");
-const { youtubeCookieOptions, youtubeRuntimeOptions, formatYtdlpTime } = require("./music-utils");
+const { youtubeCookieOptions, youtubeRuntimeOptions } = require("./music-utils");
 
 // Backpressure bounds the unread output; child pipes have small additional buffers.
 const PREFETCH_BYTES = 2 * 1024 * 1024;
@@ -14,8 +14,10 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
     // yt-dlp can itself spawn FFmpeg for download-sections. Kill that tree too.
     try {
       const killer = launch("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      killer.on("error", () => { if (!child.pipelineClosed) child.kill(); });
-      killer.on("close", code => { if (code !== 0 && !child.pipelineClosed) child.kill(); });
+      return new Promise(resolve => {
+        killer.on("error", () => { if (!child.pipelineClosed) child.kill(); resolve(); });
+        killer.on("close", code => { if (code !== 0 && !child.pipelineClosed) child.kill(); resolve(); });
+      });
     } catch { child.kill(); }
   } else if (Number.isInteger(child.pid) && platform !== "win32") {
     try { killGroup(-child.pid, "SIGKILL"); } catch { child.kill(); }
@@ -57,8 +59,8 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
     job.intentionallyAborted = reason === "intentional" && !job.error;
     job.cancelled = true;
     clearTimeout(job.startupTimer);
+    job.termination = Promise.all(job.children.map(child => terminateChild(child)));
     for (const child of job.children) {
-      terminateChild(child);
       child.stdin?.destroy();
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -105,8 +107,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
   try {
     const options = { format: "bestaudio[ext=webm][acodec=opus]/bestaudio", output: "-", noPlaylist: true,
       noWarnings: true, quiet: true, ...youtubeCookieOptions(), ...youtubeRuntimeOptions(),
-      ffmpegLocation: ffmpeg,
-      ...(offset > 0 ? { downloadSections: `*${formatYtdlpTime(offset)}-inf` } : {}) };
+      ffmpegLocation: ffmpeg };
     job.diagnosticSecrets = [options.cookies].filter(Boolean);
     job.commands.push({ stage: "extract", executable: ytdlp.constants.YOUTUBE_DL_PATH, args: [...ytdlp.args(options), "--", track.url] });
     // Native spawn avoids tinyspawn's unbounded duplicate stdout collection.
@@ -121,9 +122,12 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       job.sourceStreams.add(source);
       source.on("error", error => fail(error, "probe"));
       const effects = [];
+      // yt-dlp download-sections to stdout can exit 0 after a truncated range.
+      // Decode the original stream and trim source time before speed/effect filters.
+      if (offset > 0) effects.push(`atrim=start=${Number(offset)},asetpts=PTS-STARTPTS`);
       if (filters.bassboost) effects.push("bass=g=10");
       if (filters.eightd) effects.push("apulsator=hz=0.1");
-      if (filters.nightcore) effects.push("asetrate=44100*1.2,atempo=1.2");
+      if (filters.nightcore) effects.push("aresample=48000,asetrate=44100*1.2,atempo=1.2");
       if (filters.echo) effects.push("aecho=0.8:0.88:60:0.4");
       if (effects.length || type !== StreamType.WebmOpus) {
         job.stage = "ffmpeg";

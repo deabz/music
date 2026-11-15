@@ -245,9 +245,9 @@ class GuildMusic {
       try { await attempt(filters); }
       catch (error) {
         if (this.restartTransaction !== operation) return;
-        if (rollbackOnly) { this.failPlayback(this.current, error); throw error; }
+        if (rollbackOnly) { await this.failPlayback(this.current, error); throw error; }
         try { await attempt(previous, previousPosition); }
-        catch (rollbackError) { this.failPlayback(this.current, rollbackError); }
+        catch (rollbackError) { await this.failPlayback(this.current, rollbackError); }
         throw new Error("The stream change could not be applied; previous settings were restored.");
       }
       if (this.restartTransaction === operation && this.current) {
@@ -537,6 +537,7 @@ class GuildMusic {
     this.activePipeline = null;
     this.resource = null;
     pipeline?.cancel?.();
+    if (pipeline?.termination) this.pipelineTermination = pipeline.termination;
   }
 
   async playNext(endedTrack = null, trackToPlay = null, { recoverable = false } = {}) {
@@ -551,6 +552,12 @@ class GuildMusic {
     if (prepared) this.prefetch = null;
     if (next) this.invalidateNext();
     this.cancelActive();
+    const termination = this.pipelineTermination;
+    if (termination) {
+      await termination;
+      if (this.pipelineTermination === termination) this.pipelineTermination = null;
+      if (generation !== this.playbackGeneration || shuttingDown) return;
+    }
     if (!next) {
       this.cancelPrefetch();
       this.current = null;
@@ -577,6 +584,7 @@ class GuildMusic {
       job.onDiagnostic = error => console.error(`[stream-failure] ${streamFailureDiagnostic({ ...this, activePipeline: job }, next, error)}`);
       const active = () => this.activePipeline === job && this.playbackGeneration === generation;
       job.shouldIgnoreFailure = error => {
+        if (!active()) return false;
         const expected = isExpectedPipeFailure(error.stderr || error.message, {
           intentionallyAborted: job.intentionallyAborted, naturalAudioEnd: job.naturalAudioEnd,
           positionSeconds: playbackPosition(this), durationSeconds: next.duration
@@ -671,7 +679,7 @@ class GuildMusic {
   }
 
   failPlayback(track, error, { allowResume = true } = {}) {
-    if (!track || this.current !== track) return;
+    if (!track || this.current !== track || this.activePipeline?.intentionallyAborted) return;
     this.recordStreamEnd("error");
     console.error(`[stream-failure] ${streamFailureDiagnostic(this, track, error)}`);
     const detail = [this.activePipeline?.stderr, this.activePipeline?.filterStderr, error.stderr, error.message].filter(Boolean).join("\n");
@@ -1326,7 +1334,9 @@ const handleCommand = async interaction => {
     }
   } catch (error) {
     console.error(`[command:${interaction.commandName}] ${error.stack || error.message}`);
-    const errorMessage = "The command could not be completed. Check permissions and input, then try again. Details are in the host logs.";
+    const errorMessage = ["bassboost", "eightd", "nightcore", "echo", "forward"].includes(interaction.commandName)
+      ? "The audio change could not be applied. Previous settings were restored if playback could be recovered."
+      : "The command could not be completed. Check permissions and input, then try again. Details are in the host logs.";
     if (interaction.deferred) await interaction.editReply(errorMessage).catch(() => {});
     else await reply(interaction, errorMessage);
   } finally {

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const { PassThrough } = require("node:stream");
 const { createAudioPipeline: createPipeline, PREFETCH_BYTES, terminateChild } = require("../src/audio-pipeline");
-const { streamFailureDiagnostic } = require("../src/playback-errors");
+const { streamFailureDiagnostic, streamEndDiagnostic } = require("../src/playback-errors");
 
 function createAudioPipeline(track, filters, offset, launch, type = "webm/opus") {
   return createPipeline(track, filters, offset, launch, async stream => ({ stream, type }));
@@ -43,8 +43,9 @@ test("shared pipeline buffers with backpressure and preserves effect/seek option
   await job.ready;
   assert.equal(calls.length, 2);
   assert.ok(calls[0].args.includes("bestaudio[ext=webm][acodec=opus]/bestaudio"));
-  assert.ok(calls[0].args.includes("*00:00:12.000-inf"));
-  assert.ok(calls[1].args.includes("aecho=0.8:0.88:60:0.4"));
+  assert.ok(!calls[0].args.includes("--download-sections"));
+  assert.ok(calls[1].args.some(value => value.includes("atrim=start=12,asetpts=PTS-STARTPTS")));
+  assert.ok(calls[1].args.some(value => value.includes("aecho=0.8:0.88:60:0.4")));
   assert.equal(job.inputType, "raw");
   assert.equal(job.stream.readableHighWaterMark, PREFETCH_BYTES);
   calls[1].child.stdout.write(Buffer.alloc(PREFETCH_BYTES * 2));
@@ -148,8 +149,8 @@ test("fallback keeps seeking/effects and cancelled probes never create an orphan
   const fixture = launcher();
   const job = createAudioPipeline({ url: "test" }, { bassboost: true }, 30, fixture.spawn, "arbitrary");
   await job.ready;
-  assert.ok(fixture.calls[0].args.includes("*00:00:30.000-inf"));
-  assert.ok(fixture.calls[1].args.includes("bass=g=10"));
+  assert.ok(!fixture.calls[0].args.includes("--download-sections"));
+  assert.ok(fixture.calls[1].args.includes("atrim=start=30,asetpts=PTS-STARTPTS,bass=g=10"));
   job.cancel();
   const late = launcher();
   let release;
@@ -172,4 +173,53 @@ test("real voice-library probe preserves fallback prefix bytes without a second 
   assert.equal(fixture.calls.length, 2);
   assert.deepEqual(Buffer.concat(fixture.calls[1].child.incoming), bytes);
   job.cancel();
+});
+
+test("probe prefix and subsequent chunks pass to effects FFmpeg exactly once in order under backpressure", async () => {
+  const fixture = launcher();
+  const job = createPipeline({ title: "[x] $ &", url: "synthetic" }, { echo: true }, 60, fixture.spawn);
+  const chunks = [Buffer.alloc(8192, 1), Buffer.alloc(4200, 2), Buffer.alloc(7000, 3)];
+  fixture.calls[0].child.stdout.write(chunks[0]); await job.ready;
+  for (const chunk of chunks.slice(1)) fixture.calls[0].child.stdout.write(chunk);
+  await new Promise(setImmediate);
+  assert.deepEqual(Buffer.concat(fixture.calls[1].child.incoming), Buffer.concat(chunks));
+  assert.ok(fixture.calls[1].args.includes("-nostdin")); job.cancel();
+});
+
+test("all effect sets and seek positions use stable source-time trimming before speed filters", async () => {
+  for (const offset of [0, 60]) for (const selected of [[], ["bassboost"], ["eightd"], ["nightcore"], ["echo"], ["bassboost", "eightd", "nightcore", "echo"]]) {
+    const fixture = launcher();
+    const filters = Object.fromEntries(selected.map(name => [name, true]));
+    const job = createAudioPipeline({ title: "$ & [quotes]", url: "synthetic" }, filters, offset, fixture.spawn);
+    await job.ready;
+    assert.ok(!fixture.calls[0].args.includes("--download-sections"));
+    const location = fixture.calls[0].args.indexOf("--ffmpeg-location");
+    assert.equal(fixture.calls[0].args[location + 1], require("ffmpeg-static"));
+    if (offset || selected.length) {
+      assert.equal(job.inputType, "raw"); const filter = fixture.calls[1].args[fixture.calls[1].args.indexOf("-af") + 1];
+      if (offset) assert.ok(filter.startsWith("atrim=start=60,asetpts=PTS-STARTPTS"));
+      if (selected.includes("nightcore")) assert.ok(filter.includes("aresample=48000,asetrate=44100*1.2,atempo=1.2"));
+      assert.ok(!fixture.calls[1].args.includes("-ss"));
+    } else assert.equal(job.inputType, "webm/opus");
+    job.cancel();
+  }
+});
+
+test("delayed Windows kill failure cannot kill a child already closed", () => {
+  const { EventEmitter } = require("node:events");
+  const killer = new EventEmitter(); let kills = 0;
+  const child = { pid: 1234, kill() { kills++; } };
+  terminateChild(child, "win32", () => killer);
+  child.pipelineClosed = true; killer.emit("error", new Error("late taskkill failure")); killer.emit("close", 1);
+  assert.equal(kills, 0);
+});
+
+test("stream end log fields report source-time delivery, generation, reason and both exit codes without secrets", () => {
+  const job = { offset: 60, rate: 1.323, playbackGeneration: 7, diagnosticSecrets: ["cookie-secret"],
+    exits: { extract: { code: 1 }, ffmpeg: { code: 0 } } };
+  const line = streamEndDiagnostic({ guild: { id: "guild" } }, { title: "Song cookie-secret", duration: 213 }, job, "early end", { playbackDuration: 10000 });
+  const log = JSON.parse(line);
+  assert.equal(log.generation, 7); assert.equal(log.reason, "early end"); assert.equal(log.deliveredSeconds, 13.23);
+  assert.equal(log.expectedSeconds, 153); assert.equal(log.positionSeconds, 73.23);
+  assert.equal(log.ytdlpExitCode, 1); assert.equal(log.ffmpegExitCode, 0); assert.ok(!line.includes("cookie-secret"));
 });

@@ -117,6 +117,10 @@ reject overlapping restart requests. Failed changes restore the previous filters
 position; if that rollback also fails, normal playback error handling keeps the queue.
 Host stream-failure logs include pipeline stage, known child exit codes, both stderr
 tails, filters and start position, with cookie paths and credentials redacted.
+Seeking and effect restarts download the original stream and trim decoded source
+time locally in FFmpeg before applying effects. This avoids truncated stdout ranges
+observed with yt-dlp download-sections, but seeking far into a track requires extra
+download/decoding work. Position-zero playback retains the Opus fast path when possible.
 
 
 Optional `TRANSITION_MODE` accepts `off`, `fade` (default), or `crossfade`.
@@ -134,8 +138,16 @@ Queue-loop and autoplay handovers fade normally. A song starting after an empty
 queue has no entrance fade unless it follows a natural ending within five seconds.
 Pause freezes the ramp; server volume and the panel volume buttons remain independent
 of fade gain. Fade timers are cancelled on resource cleanup, including stop and shutdown.
-Successful clean stream EOF advances even if duration metadata overestimates the song;
-stream failures and very short streams retain their existing error/retry handling.
+An unexpected early end or recoverable stream error resumes from delivered audio time,
+including the seek offset, up to twice per track instance. These resumes do not count
+as failed songs. Intentional aborts and private/unavailable/sign-in/format failures are
+excluded; rate limits are not retried by this safety net. Existing 403 and short-stream
+fallback handling remains after the bounded recovery. Wrong duration metadata can
+cause two unnecessary resume attempts before normal failure handling takes over.
+Stream-end logs report generation, reason, source seconds delivered/expected and child
+exit codes (`null` means unavailable or the child has not exited yet). Failure logs
+also report both stderr tails, filters and redacted arguments. Late old-resource events
+are ignored; effect/seek startup has a 30-second timeout and rollback to previous settings.
 
 True crossfade is not implemented: selecting `crossfade` logs a startup warning and
 uses `fade`. It would require decoding both tracks to PCM, mixing overlapping audio,
