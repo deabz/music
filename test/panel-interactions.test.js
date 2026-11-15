@@ -31,12 +31,12 @@ test("ordinary actions defer first, call existing methods, and schedule panel up
 test("all panel controls require voice access, with Manage Server/Admin overrides", async () => {
   for (const action of Object.keys(ACTION_PERMISSIONS)) {
     const f = fixture(action, "elsewhere");
-    if (action === "effects-apply") f.interaction.customId += ":listener"; await f.handler(f.interaction);
+    if (["effects-apply", "favourites-select"].includes(action)) f.interaction.customId += ":listener"; await f.handler(f.interaction);
     assert.equal(f.calls.length, 1, action); assert.equal(f.calls[0].ephemeral, true);
     assert.match(f.calls[0].content, /voice channel/);
     for (const role of [PermissionFlagsBits.ManageGuild, PermissionFlagsBits.Administrator]) {
       const manager = fixture(action, "elsewhere", role);
-      if (action === "effects-apply") { manager.interaction.customId += ":listener"; manager.state.setAudioFilters = async () => {}; manager.interaction.editReply = async () => {}; }
+      if (["effects-apply", "favourites-select"].includes(action)) { manager.interaction.customId += ":listener"; manager.state.setAudioFilters = async () => {}; manager.interaction.editReply = async () => {}; }
       await manager.handler(manager.interaction);
       assert.ok(!manager.calls.some(item => item.content?.includes("Join the bot's voice channel")));
     }
@@ -89,4 +89,27 @@ test("suggestion selection claims once, uses clicking requester and restores the
   assert.match(f.calls.at(-1).content, /no longer available/);
   available = true; f.state.add = async () => { throw new Error("full queue"); };
   await f.handler(f.interaction); assert.equal(restored, 1);
+});
+
+
+test("heart toggles a private per-user favourite and the private menu queues as its owner", async () => {
+  const f = fixture("favourite");
+  const records = [{ id: "fav1", title: "Saved", author: "Artist", url: "url", duration: 120 }];
+  let toggles = 0, added;
+  const favourites = { toggle: async (user, track) => { assert.equal(user, "listener"); assert.equal(track.title, "Song"); return ++toggles === 1 ? "added" : "removed"; }, list: user => { assert.equal(user, "listener"); return records; } };
+  const handler = createPanelInteractionHandler({ getMusic: () => f.state, favourites, log() {} });
+  await handler(f.interaction); assert.match(f.calls.at(-2).content, /Saved to your/);
+  await handler(f.interaction); assert.match(f.calls.at(-2).content, /Removed/);
+  f.interaction.customId = "panel:favourites";
+  await handler(f.interaction);
+  const menu = f.calls.at(-2); assert.equal(menu.ephemeral, true);
+  assert.equal(menu.components[0].components[0].options[0].value, "fav1");
+  f.interaction.customId = "panel:favourites-select:listener"; f.interaction.values = ["fav1"];
+  f.interaction.message.id = "private";
+  f.interaction.guild.channels = { fetch: async () => ({ id: "voice" }) };
+  f.state.add = async (tracks, _, user) => { added = { tracks, user }; };
+  f.interaction.editReply = async () => {};
+  await handler(f.interaction); assert.equal(added.user, "listener"); assert.equal(added.tracks[0].title, "Saved");
+  f.interaction.user.id = "intruder"; added = null;
+  await handler(f.interaction); assert.equal(added, null); assert.match(f.calls.at(-1).content, /another listener/);
 });

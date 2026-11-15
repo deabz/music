@@ -99,7 +99,7 @@ test("registration failure and malformed guild snapshots do not prevent restorat
   const context = { startupComplete: false, shuttingDown: false, console: { log() {}, error() {} },
     client: { once: (_, fn) => { handler = fn; } }, Events: { ClientReady: "ready" },
     updatePresence() {}, registerCommands: async () => { throw new Error("synthetic registration failure"); },
-    loadMusicState: async () => {}, savedMusicStates: { bad: null, malformed: [], valid: { voiceChannelId: "voice" } },
+    loadMusicState: async () => {}, favourites: { load: async () => {} }, savedMusicStates: { bad: null, malformed: [], valid: { voiceChannelId: "voice" } },
     getMusic: () => state, music: new Map(), VoiceConnectionStatus: { Ready: "ready" },
     config: { autoJoin: true, voiceGuildId: "auto", voiceChannelId: "voice" } };
   vm.createContext(context); vm.runInContext(source.slice(begin, finish), context);

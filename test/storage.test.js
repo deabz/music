@@ -183,7 +183,7 @@ test("shutdown waits for queued save, flushes latest state, then disconnects", a
   const pending = new Promise(resolve => { release = resolve; });
   const storage = { loadAll: async () => ({}), saveGuilds: async () => { operations.push("save"); if (operations.length === 1) await pending; } };
   const api = vm.runInNewContext(`${source.slice(start, end)}\n${source.slice(shutdownStart, shutdownEnd)}\n({ loadMusicState, scheduleMusicSave, shutdown });`, {
-    storage, music: new Map(), console: { error() {} },
+    storage, favourites: { flush: async () => {} }, music: new Map(), console: { error() {} },
     setTimeout: callback => { scheduled = callback; return { unref() {} }; }, clearTimeout() {},
     liveNowPlaying: new Map(), healthServer: { close() {} },
     client: { destroy: () => operations.push("disconnect") }, process: { exit: () => operations.push("exit") }

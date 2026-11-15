@@ -168,4 +168,10 @@ function buildEffectsMenu(state, userId) {
     options: [["bassboost", "Bass boost"], ["eightd", "8D"], ["nightcore", "Nightcore"], ["echo", "Echo"]]
       .map(([value, label]) => ({ label, value, default: Boolean(state.audioFilters?.[value]) })) }] }];
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, PANEL_PREFIX, short };
+function buildFavouritesMenu(tracks, userId) {
+  return [{ type: 1, components: [{ type: 3, custom_id: `panel:favourites-select:${userId}`,
+    placeholder: "Choose a favourite", min_values: 1, max_values: 1,
+    options: tracks.slice(0, 25).map(track => ({ value: track.id, label: short(track.title, 100),
+      description: short(`${track.author} - ${duration(track.duration)}`, 100) })) }] }];
+}
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, PANEL_PREFIX, short };

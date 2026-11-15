@@ -1,15 +1,15 @@
 const { musicAccessError } = require("./music-permissions");
 const { playbackPosition } = require("./playback-position");
 const { buildGeniusSearchUrl } = require("./music-utils");
-const { PANEL_PREFIX, buildEffectsMenu } = require("./player-panel");
+const { PANEL_PREFIX, buildEffectsMenu, buildFavouritesMenu } = require("./player-panel");
 
 const ACTION_PERMISSIONS = {
   play: "resume", previous: "forward", pause: "pause", next: "skip", loop: "loop",
   "vol-down": "voldown", rewind: "forward", favourite: "volume", forward: "forward", "vol-up": "volup",
-  "effects-apply": "echo", lyrics: "forward", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "volume", suggest: "volume"
+  "favourites-select": "volume", "effects-apply": "echo", lyrics: "forward", shuffle: "shuffle", stop: "stop", effects: "echo", favourites: "volume", suggest: "volume"
 };
 const privateReply = (interaction, content) => interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
-function createPanelInteractionHandler({ getMusic, isReady = () => true, log = console.error } = {}) {
+function createPanelInteractionHandler({ getMusic, isReady = () => true, favourites, log = console.error } = {}) {
   return async interaction => {
     if (!interaction.customId?.startsWith(PANEL_PREFIX) || !(interaction.isButton?.() || interaction.isStringSelectMenu?.())) return false;
     if (!interaction.guild || !isReady()) {
@@ -17,7 +17,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, log = c
       return true;
     }
     const [action, ownerId] = interaction.customId.slice(PANEL_PREFIX.length).split(":");
-    const temporary = action === "effects-apply";
+    const temporary = ["effects-apply", "favourites-select"].includes(action);
     if (temporary && ownerId !== interaction.user.id) {
       await privateReply(interaction, "This menu belongs to another listener."); return true;
     }
@@ -43,7 +43,26 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, log = c
     }
     await interaction.deferUpdate();
     try {
-      if (action === "suggest") {
+      if (action === "favourite") {
+        if (!state.current) throw new Error("Nothing is playing.");
+        const result = await favourites.toggle(interaction.user.id, state.current);
+        await interaction.followUp({ content: result === "limit" ? "You can save up to 25 favourites. Remove one first."
+          : result === "added" ? "Saved to your favourites." : "Removed from your favourites.", ephemeral: true });
+      } else if (action === "favourites") {
+        const tracks = favourites.list(interaction.user.id);
+        await interaction.followUp({ content: tracks.length ? "Choose one of your saved songs." : "You have no favourites yet.",
+          ephemeral: true, ...(tracks.length ? { components: buildFavouritesMenu(tracks, interaction.user.id) } : {}) });
+      } else if (action === "favourites-select") {
+        const track = favourites.list(interaction.user.id).find(item => item.id === interaction.values?.[0]);
+        if (!track) {
+          await interaction.followUp({ content: "That favourite is no longer available.", ephemeral: true }); return true;
+        }
+        const channelId = state.connection?.joinConfig.channelId || interaction.member?.voice?.channelId;
+        const voiceChannel = await interaction.guild.channels.fetch(channelId);
+        const { id, ...song } = track;
+        await state.add([{ ...song, autoSuggested: false }], voiceChannel, interaction.user.id, interaction.channel);
+        await interaction.editReply({ content: `Added ${song.title.slice(0, 100)}.`, components: [], allowedMentions: { parse: [] } });
+      } else if (action === "suggest") {
         const selected = state.suggestions?.take(interaction.values?.[0]);
         if (!selected) {
           await interaction.followUp({ content: "That suggestion is no longer available.", ephemeral: true });

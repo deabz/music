@@ -1,6 +1,8 @@
 require("dotenv").config();
 
 const storage = require("./storage");
+const { FavouritesStore } = require("./favourites");
+const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
 const { createPlayerPanel } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
@@ -836,6 +838,7 @@ client.once(Events.ClientReady, async ready => {
   try { await registerCommands(); }
   catch (error) { console.error(`[startup] Command registration failed: ${error.stack || error.message}`); }
   await loadMusicState();
+  await favourites.load();
   for (const [guildId, snapshot] of Object.entries(savedMusicStates)) {
     try {
       if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid guild snapshot.");
@@ -1146,7 +1149,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
-const handlePanelInteraction = createPanelInteractionHandler({ getMusic, isReady: () => startupComplete && !shuttingDown });
+const handlePanelInteraction = createPanelInteractionHandler({ getMusic, favourites, isReady: () => startupComplete && !shuttingDown });
 
 client.on(Events.InteractionCreate, async interaction => {
   if (await handlePanelInteraction(interaction)) return;
@@ -1360,6 +1363,7 @@ async function shutdown(exitCode = 0) {
     try {
       await musicSaveChain;
       await writeMusicState();
+      await favourites.flush();
     } catch (error) { console.error(`[persistence] Shutdown save failed: ${error.message}`); }
     finally { clearTimeout(deadline); cleanup(); process.exit(exitCode); }
   })();
