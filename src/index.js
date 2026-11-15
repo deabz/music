@@ -185,8 +185,9 @@ class GuildMusic {
       nightcore: false,
       echo: false
     };
-    this.player.on(AudioPlayerStatus.Idle, () => this.onTrackEnd());
+    this.player.on(AudioPlayerStatus.Idle, previous => this.onTrackEnd(previous?.resource));
     this.player.on("stateChange", (_, next) => {
+      if (next.resource && next.resource !== this.resource) return;
       console.log(`[${new Date().toISOString()}] [player:${this.guild.id}] ${next.status}${this.current ? `: ${this.current.title}` : ""}`);
       if (next.status === AudioPlayerStatus.Playing) {
         if (this.activePipeline && !this.activePipeline.startedAt) this.activePipeline.startedAt = Date.now();
@@ -223,7 +224,7 @@ class GuildMusic {
   }
 
   async restartCurrent(filters, position, onFailure, { rollbackOnly = false } = {}) {
-    if (this.restartTransaction) throw new Error("Please wait; a stream restart is in progress.");
+    if (this.restartTransaction || this.skipPromise) throw new Error("Please wait; a stream restart is in progress.");
     if (!this.current) throw new Error("Nothing is playing.");
     const operation = this.restartTransaction = {};
     const track = { ...this.current };
@@ -523,6 +524,7 @@ class GuildMusic {
 
   async playNext(endedTrack = null, trackToPlay = null, { recoverable = false } = {}) {
     if (shuttingDown || (this.current && this.playing && !trackToPlay)) return;
+    const generation = this.playbackGeneration = (this.playbackGeneration || 0) + 1;
     clearTimeout(this.emptyTimer);
     const next = trackToPlay || this.queue.shift();
     const natural = !trackToPlay && Boolean(endedTrack || (this.lastNaturalEndAt && Date.now() - this.lastNaturalEndAt <= NATURAL_HANDOVER_GRACE_MS));
@@ -553,6 +555,8 @@ class GuildMusic {
     try {
       job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
       this.activePipeline = job;
+      job.playbackGeneration = generation;
+      const active = () => this.activePipeline === job && this.playbackGeneration === generation;
       job.shouldIgnoreFailure = error => {
         const expected = isExpectedPipeFailure(error.stderr || error.message, {
           intentionallyAborted: job.intentionallyAborted, naturalAudioEnd: job.naturalAudioEnd,
@@ -562,14 +566,15 @@ class GuildMusic {
         return expected;
       };
       job.onFailure = error => {
-        if (this.activePipeline === job && !job.cancelled && !recoverable) this.failPlayback(next, error);
+        if (active() && !job.cancelled && !recoverable) this.failPlayback(next, error);
       };
       if (!job.formatReady) await job.ready;
       if (recoverable && job.audioReady) await job.audioReady;
-      if (this.activePipeline !== job || job.intentionallyAborted) return;
+      if (!active() || job.intentionallyAborted) return;
       if (job.error) throw job.error;
       const resource = createAudioResource(job.stream, { inputType: job.inputType, inlineVolume: true });
       this.resource = resource;
+      resource.playbackGeneration = generation;
       this.resourcePlaybackRate = job.rate;
       resource.volume.setVolume(this.volume / 100);
       if (this.transitions) {
@@ -581,7 +586,7 @@ class GuildMusic {
       console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""} input=${job.inputType}`);
       this.player.play(resource);
       if (recoverable) job.onFailure = error => {
-        if (this.activePipeline === job && !job.intentionallyAborted) {
+        if (active() && !job.intentionallyAborted) {
           if (this.restartTransaction) job.restartError = error;
           else if (this.restartRecovery) void this.rollbackRestart(error);
           else this.failPlayback(next, error);
@@ -659,7 +664,8 @@ class GuildMusic {
     return this.playNext();
   }
 
-  async onTrackEnd() {
+  async onTrackEnd(endedResource) {
+    if (endedResource && (endedResource !== this.resource || endedResource.playbackGeneration !== this.playbackGeneration)) return;
     const endedTrack = this.current;
     if (shuttingDown || !endedTrack) return;
     if (this.restartTransaction) return;
@@ -700,6 +706,7 @@ class GuildMusic {
   }
 
   async previous() {
+    if (this.restartTransaction || this.skipPromise) throw new Error("Please wait; a stream restart is in progress.");
     this.lastNaturalEndAt = null;
     if (!this.current) return false;
     if (playbackPosition(this) > 5 || !this.history?.length) {
@@ -730,6 +737,7 @@ class GuildMusic {
   }
 
   async skipCurrent() {
+    if (this.restartTransaction) throw new Error("Please wait; a stream restart is in progress.");
     this.lastNaturalEndAt = null;
     const skipped = this.current;
     if (!skipped) return false;
@@ -748,6 +756,7 @@ class GuildMusic {
   }
 
   stop() {
+    this.playbackGeneration = (this.playbackGeneration || 0) + 1;
     this.restartTransaction = null;
     this.restartRecovery = null;
     this.lastNaturalEndAt = null;

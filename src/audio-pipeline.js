@@ -13,7 +13,7 @@ function terminateChild(child, platform = process.platform, launch = spawn, kill
     // yt-dlp can itself spawn FFmpeg for download-sections. Kill that tree too.
     try {
       const killer = launch("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      killer.on("error", () => child.kill());
+      killer.on("error", () => { if (!child.pipelineClosed) child.kill(); });
       killer.on("close", code => { if (code !== 0 && !child.pipelineClosed) child.kill(); });
     } catch { child.kill(); }
   } else if (Number.isInteger(child.pid) && platform !== "win32") {
@@ -51,7 +51,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
   stream.on("finish", () => { job.outputDone = true; });
   job.cancel = (reason = "intentional") => {
     if (job.cancelled) return;
-    job.intentionallyAborted = reason === "intentional";
+    job.intentionallyAborted = reason === "intentional" && !job.error;
     job.cancelled = true;
     for (const child of job.children) {
       terminateChild(child);
