@@ -59,3 +59,14 @@ test("Render deploys the verified branch using the production Docker health endp
   assert.match(blueprint, /healthCheckPath: \/health/);
   assert.ok(!/NODE_VERSION|buildCommand:|startCommand:/.test(blueprint));
 });
+
+test("locked Discord HTTP client includes the undici security fixes", () => {
+  const lock = require("../package-lock.json");
+  const selected = Object.entries(lock.packages).filter(([name]) => name.endsWith("/undici"));
+  assert.ok(selected.length);
+  for (const [, entry] of selected) {
+    const [major, minor, patch] = entry.version.split(".").map(Number);
+    assert.equal(major, 6, "Keep the supported Discord HTTP client major version");
+    assert.ok(minor > 29 || (minor === 29 && patch >= 1));
+  }
+});

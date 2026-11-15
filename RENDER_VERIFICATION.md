@@ -272,5 +272,59 @@ read/write connectivity remain unverified. JSON storage was exercised for real.
 Ephemeral disk/favourites loss, host UDP restrictions, YouTube datacenter blocking
 and free-tier memory remain deployment risks. No cost-bearing service was created.
 
-Hosted Linux/Docker execution results will be recorded after the workflow runs.
-Until then they remain pending, rather than inferred from the Windows results.
+### Hosted Linux/Docker evidence
+
+Run https://github.com/deabz/music/actions/runs/43745454010 tested db5c963 on clean
+Ubuntu with Node 22 and 24. BOTH jobs passed: clean npm ci, 247 tests, check,
+full-history scanner and runtime smoke. Node 22 additionally ran:
+
+```text
+docker build --pull -t nyx-release .
+docker run --rm --network none nyx-release node scripts/runtime-smoke.cjs
+docker run --rm nyx-release npm run selftest
+```
+
+Build and offline container smoke PASSED, as the image's unprivileged node user.
+All eight real FFmpeg pipeline combinations passed in the image. Linux tests also
+exercised actual read-only cookie-file permissions with synthetic data, not user
+cookies. Public-network container diagnostics reported:
+
+```text
+[diagnostics] node: v22.23.5 linux
+[diagnostics] bot: 1.0.0 commit unknown
+[diagnostics] yt-dlp: OK 2026.10.26
+[diagnostics] ffmpeg: yes ffmpeg version 7.0.2-static
+[diagnostics] python3: yes Python 3.11.2 (informational)
+[diagnostics] YOUTUBE_COOKIES_FILE configured: no
+[diagnostics] YTDLP_PROXY configured: no
+[diagnostics] udp: 1.1.1.1=reply 8.8.8.8=reply (hint only; does not verify Discord voice UDP)
+[diagnostics] gateway: HTTP 200
+[diagnostics] youtube: OK (search=3 audio=262144 bytes)
+[diagnostics] summary: youtube=OK ytdlp=OK ffmpeg=OK udp=hint-OK
+```
+
+Unknown commit is expected without .git/host metadata in a standalone image; Render
+supplies RENDER_GIT_COMMIT. This proves execution on a GitHub Linux runner, NOT on
+Render or through a Discord voice session.
+
+### Production dependency advisory remediation
+
+Read-only npm audit --omit=dev --json found one high-severity affected package:
+locked undici 6.28.1, used by discord.js/@discordjs/rest, with five advisory records
+(EventSource memory, excessive content encodings, TLS option preservation, TLS
+renegotiation and WebSocket PONG buffering). Reference:
+https://github.com/advisories/GHSA-2m5v-pch6-74hx
+
+Ran npm update undici --package-lock-only --ignore-scripts --no-audit --no-fund.
+Only its version, resolved URL and integrity changed in package-lock.json, selecting
+6.29.1 within both existing ^6.27.0 ranges. No local node_modules installation or
+package.json dependency change occurred. A regression test checks the patched
+locked version. The hosted workflow now enforces npm audit --omit=dev
+--audit-level=low; no detection rule was relaxed. npm audit --omit=dev
+--audit-level=low then returned zero vulnerabilities; local tests increased to 248
+and check passed. Local installed undici remains 6.28.1; clean CI/image installs
+must verify the patched lock before deployment.
+
+The first restricted network audit attempt returned an error response, not a clean
+audit. The unrestricted read-only audit above was the successful verification.
+Final patched-lock Linux/image results are recorded below after execution.

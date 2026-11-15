@@ -23,6 +23,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=low
       - run: npm test
       - run: npm run check
       - run: npm run scan:secrets
