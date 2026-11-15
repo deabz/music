@@ -17,6 +17,7 @@ function startup(prepareYouTubeCookies) {
   let logins = 0;
   const startBot = vm.runInNewContext(`${source.slice(start, end)}\nstartBot;`, {
     prepareYouTubeCookies,
+    logYtdlpVersion: async () => {},
     config: { token: "synthetic-test-token" },
     client: {
       isReady: () => false,

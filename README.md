@@ -75,3 +75,13 @@ The bot must be above any channel restrictions and have Connect/Speak permission
 Run `npm run check` and `npm test`. There is no build or lint script. To use another local port in PowerShell, run `$env:PORT='3001'; npm start`. The site uses vanilla CSS/JavaScript, no external font or animation requests, reduced-motion support, and a reveal fallback after 1.5 seconds.
 
 For real browser checks, install Chromium once with `npx playwright install chromium`, start the site on port 3000, then run `npm run test:website`. Set `NYX_TEST_URL` to test another localhost port. Playwright checks asset responses/cache headers, animated computed styles, long titles, copy feedback, paused playback, song changes, 375px layout, reduced motion, and disabled JavaScript. Screenshots and its JSON report are saved under the ignored `data/website-qa/` directory. Artwork and health fixtures are used for repeatable playback-state tests; normal page loads also use the live local bot. CSS/JS links carry a content hash and development assets use `Cache-Control: no-cache`; restart the Node process after editing page templates or motion sources.
+
+
+## Local yt-dlp maintenance
+
+Startup logs `[ytdlp] version ...` for the executable selected by `youtube-dl-exec`.
+A missing/unreadable version produces a warning and does not prevent startup.
+Check it without connecting Discord with `npm run ytdlp-version`.
+Update that same executable with `npm run update-ytdlp` (Windows supported).
+This updates only the downloader binary, not npm dependencies; stop the bot first.
+YouTube changes frequently, so updating yt-dlp is the first thing to try when downloads start failing.

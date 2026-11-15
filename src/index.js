@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const storage = require("./storage");
+const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
 const play = require("play-dl");
 const { musicAccessError } = require("./music-permissions");
@@ -1400,6 +1401,7 @@ async function startBot() {
   startupTimer.unref();
   client.once(Events.ClientReady, () => clearTimeout(startupTimer));
   try {
+    await logYtdlpVersion();
     console.log("[startup] Preparing YouTube cookies (if configured).");
     await prepareYouTubeCookies();
     phase = "Discord login";
