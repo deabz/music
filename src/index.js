@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const storage = require("./storage");
 const { createPlayerPanel } = require("./player-panel");
+const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
@@ -1103,7 +1104,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 });
 
+const handlePanelInteraction = createPanelInteractionHandler({ getMusic, isReady: () => startupComplete && !shuttingDown });
+
 client.on(Events.InteractionCreate, async interaction => {
+  if (await handlePanelInteraction(interaction)) return;
   if (!interaction.isChatInputCommand()) return;
   await handleCommand(interaction);
 });
