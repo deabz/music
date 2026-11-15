@@ -398,10 +398,15 @@ class GuildMusic {
 
   invalidateNext() {
     this.nextGeneration = (this.nextGeneration || 0) + 1;
-    this.prefetch?.job.cancel();
-    this.prefetch = null;
+    this.cancelPrefetch();
     this.suggestionAbort?.abort();
     this.suggestionAbort = null;
+  }
+
+  cancelPrefetch() {
+    const prefetch = this.prefetch;
+    this.prefetch = null;
+    prefetch?.job?.cancel?.();
   }
 
   queueChanged() {
@@ -415,8 +420,8 @@ class GuildMusic {
     const track = this.loop === "track" && this.current ? this.current : this.queue[0]
       || (this.loop === "queue" ? this.current : null);
     if (track) {
-      if (this.prefetch?.track === track) return;
-      this.prefetch?.job.cancel();
+      if (this.prefetch?.track === track && this.prefetch?.job) return;
+      this.cancelPrefetch();
       const job = createAudioPipeline(track, this.audioFilters);
       this.prefetch = { track, job };
       job.onFailure = () => {}; // Retain error for activation; never log speculative aborts.
@@ -449,9 +454,10 @@ class GuildMusic {
   }
 
   cancelActive() {
-    this.activePipeline?.cancel();
+    const pipeline = this.activePipeline;
     this.activePipeline = null;
     this.resource = null;
+    pipeline?.cancel?.();
   }
 
   async playNext(endedTrack = null, trackToPlay = null) {
@@ -464,6 +470,7 @@ class GuildMusic {
     if (next) this.invalidateNext();
     this.cancelActive();
     if (!next) {
+      this.cancelPrefetch();
       this.current = null;
       this.panelSuggestions = [];
       this.playing = false;
@@ -478,8 +485,9 @@ class GuildMusic {
     this.playing = true;
     updatePresence();
     if (!trackToPlay) this.totalTracksPlayed++;
+    let job;
     try {
-      const job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
+      job = prepared || createAudioPipeline(next, this.audioFilters, this.resumeOffsetSeconds);
       this.activePipeline = job;
       job.shouldIgnoreFailure = error => {
         const expected = isExpectedPipeFailure(error.stderr || error.message, {
@@ -502,7 +510,9 @@ class GuildMusic {
       console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""} input=${job.inputType}`);
       this.player.play(resource);
       scheduleMusicSave();
-    } catch (error) { this.failPlayback(next, error); }
+    } catch (error) {
+      if ((!job || this.activePipeline === job) && !job?.intentionallyAborted) this.failPlayback(next, error);
+    }
   }
 
   failPlayback(track, error) {

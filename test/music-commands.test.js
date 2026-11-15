@@ -75,6 +75,18 @@ test("actual playNext safely ends an empty queue with null prefetch", async () =
   assert.equal(state.current, null); assert.equal(state.playing, false); assert.equal(state.resource, null);
 });
 
+test("pipeline cleanup accepts absent jobs and detaches references before cancellation callbacks", () => {
+  const GuildMusic = guildMusicClass();
+  const state = Object.assign(Object.create(GuildMusic.prototype), { nextGeneration: 0 });
+  for (const prefetch of [null, {}, { job: null }]) {
+    state.prefetch = prefetch; state.invalidateNext(); state.cancelActive();
+    assert.equal(state.prefetch, null); assert.equal(state.activePipeline, null);
+  }
+  state.prefetch = { job: { cancel() { assert.equal(state.prefetch, null); } } };
+  state.activePipeline = { cancel() { assert.equal(state.activePipeline, null); assert.equal(state.resource, null); } };
+  state.invalidateNext(); state.cancelActive(); state.cancelActive();
+});
+
 test("known downloader failure stops without repeat/autoplay and preserves queue", async () => {
   const notices = [];
   const GuildMusic = guildMusicClass();
