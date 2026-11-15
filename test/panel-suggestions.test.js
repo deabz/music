@@ -1,7 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { PanelSuggestions } = require("../src/panel-suggestions");
-const { buildPlayerPanel } = require("../src/player-panel");
+const { buildPlayerPanel, PANEL_SUGGESTION_COUNT } = require("../src/player-panel");
 test("suggestion searches are cached per track and stale responses cannot change another song's menu", async () => {
   const one = { url: "one" }, two = { url: "two" };
   const state = { current: one, queue: [] };
@@ -32,7 +32,7 @@ test("stopping aborts pending suggestions and select options obey Discord limits
   const ready = new PanelSuggestions(state, { search: async () => Array.from({ length: 20 }, (_, index) => ({ title: "x".repeat(150), author: "a".repeat(150), url: String(index), duration: 180 })) });
   await ready.load(state.current);
   const options = buildPlayerPanel(state).components[0].components[0].options;
-  assert.equal(options.length, 10); assert.equal(new Set(options.map(item => item.value)).size, 10);
+  assert.equal(options.length, PANEL_SUGGESTION_COUNT); assert.equal(new Set(options.map(item => item.value)).size, PANEL_SUGGESTION_COUNT);
   for (const option of options) { assert.ok(option.label.length <= 100); assert.ok(option.description.length <= 100); }
   ready.dispose();
 });

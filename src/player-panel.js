@@ -1,5 +1,6 @@
 
 const PANEL_PREFIX = "panel:";
+const PANEL_SUGGESTION_COUNT = 5;
 const short = (value, limit) => {
   const text = String(value || "Unknown track").replace(/[\u0000-\u001f\u007f]+/g, " ");
   if (text.length <= limit) return text;
@@ -54,9 +55,10 @@ function buildPlayerPanel(state, { avatarUrl } = {}) {
   const embed = { title: `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"} in queue`,
     description: lines.join("\n"), color: 0xE6B655,
     footer: { text: `Volume: ${state.volume ?? 80}`, ...(avatarUrl ? { icon_url: avatarUrl } : {}) } };
-  const suggestions = (state.panelSuggestions || []).slice(0, 10);
+  const suggestions = (state.panelSuggestions || []).slice(0, Math.min(25, PANEL_SUGGESTION_COUNT));
   const options = suggestions.length ? suggestions.map(item => ({ label: short(item.title, 100),
-    description: short(`${item.author || "Unknown artist"} - ${duration(item.duration)}`, 100), value: item.id }))
+    description: short(item.channel?.name || item.author || "Unknown channel", 100 - ` - youtube - ${duration(item.duration)}`.length)
+      + ` - youtube - ${duration(item.duration)}`, value: item.id }))
     : [{ label: !state.current ? "Nothing is playing" : state.panelSuggestions == null ? "Loading suggestions..." : "No suggestions available", value: "none" }];
   const components = [{ type: 1, components: [{ type: 3, custom_id: "panel:suggest", placeholder: "Select a suggested song",
     min_values: 1, max_values: 1, disabled: !state.current || !suggestions.length, options }] }];
@@ -192,4 +194,4 @@ function buildFavouritesMenu(tracks, userId) {
     options: tracks.slice(0, 25).map(track => ({ value: track.id, label: short(track.title, 100),
       description: short(`${track.author} - ${duration(track.duration)}`, 100) })) }] }];
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, PANEL_PREFIX, short, escapePanelText };
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, short, escapePanelText };

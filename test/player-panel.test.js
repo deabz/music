@@ -128,3 +128,18 @@ test("waiting titles truncate at forty characters and hostile markdown/mentions 
   assert.ok(text.length <= 4096);
   assert.equal(payload.allowedMentions.parse.length, 0);
 });
+
+
+test("suggestion count has one exported setting and channel descriptions retain source and duration", () => {
+  const { PANEL_SUGGESTION_COUNT } = require("../src/player-panel");
+  assert.equal(PANEL_SUGGESTION_COUNT, 5);
+  const suggestions = Array.from({ length: 10 }, (_, index) => ({ ...track("Title " + index), author: "C".repeat(160), id: "short_" + index }));
+  const menu = buildPlayerPanel({ current: track(), queue: [], loop: "off", panelSuggestions: suggestions }).components[0].components[0];
+  assert.equal(menu.placeholder, "Select a suggested song");
+  assert.equal(menu.options.length, PANEL_SUGGESTION_COUNT);
+  for (const option of menu.options) {
+    assert.ok(option.description.endsWith(" - youtube - 02:05"));
+    assert.equal(option.description.length, 100); assert.ok(option.description.includes("\u2026"));
+    assert.ok(option.label.startsWith("Title ")); assert.ok(option.value.startsWith("short_"));
+  }
+});
