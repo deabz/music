@@ -98,7 +98,10 @@ async function resolveSuggestedTracks(track, triedUrls, search, artworkFrom, sup
   } finally { provider.dispose(); }
 }
 async function resolveSuggestedTrack(...args) {
-  return (await resolveSuggestedTracks(...args))[0] || null;
+  const items = await resolveSuggestedTracks(...args);
+  const [track, triedUrls, , , state] = args;
+  return require("./autoplay-candidates").chooseAutoplayCandidate(items,
+    state || { current: track, queue: [], autoplayTriedUrls: triedUrls }, track);
 }
 
 function buildGeniusSearchUrl(title, artist) {

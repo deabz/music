@@ -7,7 +7,7 @@ function hasVersion(value) {
   const text = ` ${normalize(value)} `;
   return AUTOPLAY_VERSION_KEYWORDS.some(word => text.includes(` ${normalize(word)} `));
 }
-const credits = value => value.replace(/\s+(?:ft\.?|feat\.?|featuring|with)\s+.*$/i, "");
+const credits = value => value.replace(/\s+(?:(?:ft|feat)\.\s*|(?:ft|feat|featuring|with)\s+).*$/i, "");
 function cleanTitle(value) {
   return credits(String(value || "").replace(/[\[({]([^\])}]+)[\])}]/g, (whole, content) => {
     if (hasVersion(content)) return ` ${content} `;
@@ -20,8 +20,14 @@ function songIdentity(track) {
   const artist = credits(String(rawArtist).replace(/\s*[-\u2013\u2014]\s*Topic$|VEVO$|\s+Official(?:\s+(?:Music|Channel))?$/i, "").trim());
   const title = cleanTitle(parts.join(" - "));
   const artistKey = normalize(artist).replace(/\s/g, "");
-  const titleKey = normalize(title);
-  return { artist, title, artistKey, key: titleKey ? `${artistKey}::${titleKey}` : "" };
+  let titleKey = normalize(title);
+  const original = ` ${normalize(track?.title)} `;
+  for (const version of AUTOPLAY_VERSION_KEYWORDS) {
+    const word = normalize(version);
+    if (original.includes(` ${word} `) && !(` ${titleKey} `).includes(` ${word} `)) titleKey += ` ${word}`;
+  }
+  titleKey = titleKey.trim();
+  return { artist, title, titleKey, artistKey, key: titleKey ? `${artistKey}::${titleKey}` : "" };
 }
 const songKey = track => songIdentity(track).key;
 class SongMemory {
@@ -30,7 +36,8 @@ class SongMemory {
     const instance = track.panelInstanceId || track;
     if (instance === this.lastInstance) return;
     this.lastInstance = instance;
-    this.entries.push({ key: songKey(track), url: track.url, artist: songIdentity(track).artistKey });
+    const identity = songIdentity(track);
+    this.entries.push({ key: identity.key, titleKey: identity.titleKey, url: track.url, artist: identity.artistKey });
     this.entries = this.entries.slice(-RECENT_SONG_MEMORY_SIZE);
   }
   keys() { return new Set(this.entries.map(entry => entry.key).filter(Boolean)); }

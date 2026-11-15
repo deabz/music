@@ -994,6 +994,38 @@ test("history retains the last twenty completed/skipped tracks without stream re
   assert.ok(!("http403Retries" in state.history[0]));
 });
 
+test("the real Playing callback remembers user and autoplay starts without counting pause/resume twice", () => {
+  const { SongMemory } = require("../src/song-identity");
+  let changed;
+  const state = { guild: { id: "guild" }, current: { title: "Artist - User Song", url: "one", panelInstanceId: "one" },
+    autoplayMemory: new SongMemory(), prepareNext() {}, player: { on: (event, callback) => { if (event === "stateChange") changed = callback; } } };
+  const start = source.indexOf('this.player.on("stateChange",');
+  const end = source.indexOf('this.player.on("error",', start);
+  vm.runInNewContext(`(function() { ${source.slice(start, end)} }).call(state);`, {
+    state, AudioPlayerStatus, console: quietConsole, scheduleMusicSave() {}
+  });
+  changed({}, { status: AudioPlayerStatus.Playing }); changed({}, { status: AudioPlayerStatus.Playing });
+  assert.equal(state.autoplayMemory.entries.length, 1);
+  state.current = { title: "Other - Autoplay", url: "two", panelInstanceId: "two", autoSuggested: true };
+  changed({}, { status: AudioPlayerStatus.Playing }); assert.equal(state.autoplayMemory.entries.length, 2);
+});
+
+test("shared suggestions lookup runs once in background, prefetches one candidate and starts it once", async () => {
+  const { PanelSuggestions } = require("../src/panel-suggestions");
+  const f = skipFixture({ waiting: [] }); let searches = 0;
+  f.state.current = { title: "Artist - Original", author: "Artist", url: "original", duration: 180 };
+  f.state.suggestions = new PanelSuggestions(f.state, { search: async () => {
+    searches++; return [{ title: "Artist - Original (Audio)", author: "Artist", url: "duplicate", duration: 180 },
+      { title: "Different - Fresh", author: "Different", url: "fresh", duration: 180 }];
+  } });
+  const pending = f.state.suggestions.load(f.state.current); f.state.prepareNext(); f.state.prepareNext();
+  assert.equal(f.state.queue.length, 0); await pending; await new Promise(setImmediate);
+  assert.equal(searches, 1); assert.equal(f.state.queue.length, 1); assert.equal(f.state.queue[0].url, "fresh");
+  assert.equal(f.jobs.length, 1); assert.equal(f.starts.length, 0);
+  f.state.resource = { playbackDuration: 180000 }; await f.state.onTrackEnd();
+  assert.equal(f.starts.length, 1); assert.equal(f.state.current.url, "fresh"); f.state.stop(); f.state.suggestions.dispose();
+});
+
 test("previous restarts after five seconds or without history; otherwise restores history and invalidates prefetch", async () => {
   const GuildMusic = guildMusicClass();
   for (const [position, history] of [[6, [{ title: "old" }]], [2, []]]) {

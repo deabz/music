@@ -10,6 +10,7 @@ test("ranker rejects alternate uploads of FRANCHISE, queue/recent repeats, junk,
   const old = song("Other", "Played"), waiting = song("Next", "Waiting");
   const memory = new SongMemory(); memory.recordStart(old);
   const candidates = [song("Travis Scott", "FRANCHISE (Audio)"), { ...old, url: "other-upload" }, waiting,
+    { title: "FRANCHISE (Lyrics)", author: "Lyrics Channel", url: "bare-lyrics-upload", duration: 180 },
     song("Other", "Nursery Rhymes"), song("Other", "New Song (Remix)"), { ...song("Other", "Short"), duration: 59 },
     { ...song("Other", "Long"), duration: 361 }, song("Fresh", "Good")];
   assert.deepEqual(rankAutoplayCandidates(candidates, { current, queue: [waiting], autoplayMemory: memory }, current).map(track => track.title), ["Fresh - Good"]);
@@ -57,4 +58,45 @@ test("suggestion list caps each main artist at the exported limit and deduplicat
   const limited = limitSuggestionArtists(items);
   assert.equal(limited.filter(track => track.author === "Artist").length, SUGGESTIONS_MAX_PER_ARTIST);
   assert.equal(limited.length, 3);
+});
+test("cached historical mixes do not cause new historical requests; video ID variants cannot repeat", async () => {
+  let requests = 0;
+  const state = { current: seed, queue: [], history: [{ ...song("Past", "History"), url: "https://youtube.com/watch?v=9bZkp7q19f0" }] };
+  const provider = new AutoplayCandidates(state, { mix: async () => { requests++; return [song("Fresh", "New")]; } });
+  await provider.list(seed); assert.equal(requests, 1); provider.dispose();
+  const retitled = { ...song("New Name", "Retitled"), url: "https://youtu.be/dQw4w9WgXcQ?t=30" };
+  assert.equal(rankAutoplayCandidates([retitled], state, seed).length, 0);
+});
+test("duration median and detected title script contribute to session relevance", () => {
+  const current = { ...seed, title: "Artist - \u041f\u0435\u0441\u043d\u044f", duration: 120 };
+  const state = { current, queue: [], history: [{ ...song("Past", "Previous"), duration: 240 }] };
+  const matching = { ...song("Other", "\u041d\u043e\u0432\u0430\u044f"), duration: 180 };
+  const other = { ...song("Different", "English Title"), duration: 320 };
+  const ranked = rankAutoplayCandidates([other, matching], state, current);
+  assert.equal(ranked[0].title, matching.title);
+  assert.equal(ranked[0].suggestionScore - ranked[1].suggestionScore, AUTOPLAY_SCORE_WEIGHTS.similarDuration + AUTOPLAY_SCORE_WEIGHTS.sameScript);
+});
+test("lookup queue serializes per server and cancellation prevents queued requests from starting", async () => {
+  let requests = 0, active = 0, maxActive = 0;
+  const state = { current: seed, queue: [] };
+  const provider = new AutoplayCandidates(state, { mix: (id, signal) => {
+    requests++; active++; maxActive = Math.max(maxActive, active);
+    return new Promise((resolve, reject) => signal.addEventListener("abort", () => { active--; reject(Object.assign(new Error("cancelled"), { name: "AbortError" })); }, { once: true }));
+  } });
+  const first = provider.list(seed); const caught = first.catch(error => assert.equal(error.name, "AbortError"));
+  const second = provider.list({ ...seed, url: "https://youtube.com/watch?v=9bZkp7q19f0" });
+  await new Promise(setImmediate); assert.equal(requests, 1);
+  provider.cancel(); await caught; assert.deepEqual(await second, []);
+  assert.equal(maxActive, 1); assert.equal(active, 0); provider.dispose();
+});
+test("Mix extractor uses bounded flat watch radio requests and preserves required entry metadata", async () => {
+  const { fetchMix } = require("../src/autoplay-candidates");
+  const controller = new AbortController();
+  const entries = await fetchMix("dQw4w9WgXcQ", controller.signal, async (url, options, execution) => {
+    assert.equal(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDdQw4w9WgXcQ");
+    assert.equal(options.flatPlaylist, true); assert.equal(options.skipDownload, true); assert.equal(options.playlistEnd, 25);
+    assert.equal(execution.signal, controller.signal); assert.equal(execution.timeout, 20000);
+    return { entries: [{ id: "9bZkp7q19f0", title: "Artist - Song", channel: "Artist", duration: 180, url: "9bZkp7q19f0", live_status: null }] };
+  });
+  assert.equal(entries[0].url, "https://www.youtube.com/watch?v=9bZkp7q19f0"); assert.equal(entries[0].duration, 180); assert.equal(entries[0].isLive, false);
 });

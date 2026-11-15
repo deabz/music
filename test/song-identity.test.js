@@ -8,12 +8,14 @@ test("FRANCHISE uploads, feature credits, Unicode and metadata suffixes share on
   assert.equal(new Set(titles.map(title => songKey({ title, author: "Lyrics Channel" }))).size, 1);
   assert.equal(songKey({ title: "Beyonc\u00e9 - A & B [4K]" }), songKey({ title: "Beyonce - A and B (Clean)" }));
   assert.equal(songKey({ title: "Song (Audio)", author: "Artist - Topic" }), songKey({ title: "Artist - Song" }));
+  assert.equal(songKey({ title: "Artist - Don't Stop" }), songKey({ title: "Artist - Dont Stop" }));
 });
 test("different versions keep different song keys and are flagged for autoplay rejection", () => {
   const base = songKey({ title: "Artist - Song" });
   for (const version of ["Remix", "Live", "Acoustic", "Sped Up", "Slowed", "Cover", "Instrumental"]) {
     const title = `Artist - Song (${version})`;
     assert.notEqual(songKey({ title }), base); assert.equal(hasVersion(title), true);
+    assert.notEqual(songKey({ title: `Artist - Song feat. Guest (${version})` }), base);
   }
 });
 test("memory records user/autoplay starts once per instance, caps 50 and includes queue in exclusion", () => {

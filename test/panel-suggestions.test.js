@@ -2,6 +2,8 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { PanelSuggestions } = require("../src/panel-suggestions");
 const { buildPlayerPanel, PANEL_SUGGESTION_COUNT } = require("../src/player-panel");
+const { AutoplayCandidates } = require("../src/autoplay-candidates");
+const { SongMemory, songKey } = require("../src/song-identity");
 test("suggestion searches are cached per track and stale responses cannot change another song's menu", async () => {
   const one = { url: "one" }, two = { url: "two" };
   const state = { current: one, queue: [] };
@@ -35,4 +37,30 @@ test("stopping aborts pending suggestions and select options obey Discord limits
   assert.equal(options.length, PANEL_SUGGESTION_COUNT); assert.equal(new Set(options.map(item => item.value)).size, PANEL_SUGGESTION_COUNT);
   for (const option of options) { assert.ok(option.label.length <= 100); assert.ok(option.description.length <= 100); }
   ready.dispose();
+});
+test("dropdown and autoplay share ranking and dynamically exclude newly queued/played items", async () => {
+  const current = { title: "Seed - Original", url: "https://youtube.com/watch?v=dQw4w9WgXcQ", duration: 180 };
+  const state = { current, queue: [], autoplayMemory: new SongMemory() }; let searches = 0;
+  const items = Array.from({ length: 6 }, (_, index) => ({ title: `Artist ${index % 3} - Song ${index}`, author: `Artist ${index % 3}`, url: `https://example.com/${index}`, duration: 180 }));
+  const provider = new AutoplayCandidates(state, { mix: async () => { searches++; return items; } });
+  const cache = new PanelSuggestions(state, { provider }); await cache.load(current);
+  const menu = state.panelSuggestions, autoplay = await cache.candidates(current);
+  assert.deepEqual(menu.map(songKey), autoplay.map(songKey)); assert.equal(searches, 1);
+  const oldId = menu[0].id; state.queue.push(menu[0]); state.autoplayMemory.recordStart(menu[1]); cache.refresh();
+  assert.equal(cache.take(oldId), null);
+  assert.ok(!state.panelSuggestions.some(item => songKey(item) === songKey(menu[0]) || songKey(item) === songKey(menu[1])));
+  assert.deepEqual((await cache.candidates(current)).map(songKey), state.panelSuggestions.map(songKey)); cache.dispose();
+});
+test("changing songs aborts old provider work and stop cancels the replacement lookup", async () => {
+  const one = { title: "One - Seed", url: "https://youtube.com/watch?v=dQw4w9WgXcQ", duration: 180 };
+  const two = { title: "Two - Seed", url: "https://youtube.com/watch?v=9bZkp7q19f0", duration: 180 };
+  const state = { current: one, queue: [] }; const signals = [];
+  const provider = new AutoplayCandidates(state, { mix: (id, signal) => {
+    signals.push(signal);
+    return new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { name: "AbortError" })), { once: true }));
+  } });
+  const cache = new PanelSuggestions(state, { provider }); const first = cache.load(one); await new Promise(setImmediate);
+  state.current = two; const second = cache.load(two); await new Promise(setImmediate);
+  assert.equal(signals[0].aborted, true); cache.clearActive(); await Promise.all([first, second]);
+  assert.ok(signals.every(signal => signal.aborted)); assert.deepEqual(state.panelSuggestions, []); cache.dispose();
 });

@@ -104,10 +104,39 @@ as normal playback. A small prefix of the actual stream is probed: WebM Opus use
 other formats are converted by FFmpeg to 48 kHz stereo signed 16-bit PCM. This reduces transition
 latency but cannot guarantee sample-perfect gapless playback or avoid buffering on slow networks.
 
-Autoplay prefers the previous artist/title and channel. Edit `AUTOPLAY_REJECT_KEYWORDS` in
-`src/music-utils.js` to change rejection rules for kids content and non-song results. Unrelated
-results are rejected even if no alternative remains. These are metadata heuristics, not a genre
-classifier. Recent suggestion URLs are tracked in memory for the current session.
+Autoplay uses the current song's YouTube Mix (`watch?v=ID&list=RDID`) in the background,
+with flat extraction capped at 25 entries. Mix results are cached per seed for 30 minutes.
+Cached mixes from the previous two tracks contribute candidates without extra history
+requests; membership in multiple seeds' mixes scores higher. Empty, failed or entirely
+rejected mixes fall back to searches using the cleaned title, available genre/tags/categories,
+and previous artists. Lookups serialize per server, time out, and cancel on track change/stop.
+The shared ranked pipeline also supplies the panel suggestions and prefetches the autoplay pick.
+
+Song identity uses normalized main artist and title, ignoring official/audio/lyrics labels,
+feature credits, punctuation and equivalent Unicode. The last 50 actual starts (user or
+autoplay), the current song, and waiting queue are excluded, alongside recent URLs/video IDs.
+Memory resets on bot restart; this is a recent-session guarantee, not permanent no-repeat
+storage. Missing or misleading artist/title metadata can prevent identifying duplicate uploads.
+Bare-title uploads from generic lyrics/uploader channels also get a conservative same-title
+check; this can exclude distinct songs that happen to share a title.
+Explicit user requests are never filtered by autoplay's rules.
+
+Candidates must be 60-360 seconds, non-live, and pass kids/non-song and version rejection
+rules. Remix, live, acoustic, sped-up/slowed, reverb, nightcore, 8D, cover, karaoke,
+instrumental, mashup and mix versions have distinct keys but are rejected as suggestions.
+Ranking rewards multi-seed membership, duration near the recent median and matching title
+script, and penalizes artists in the last two tracks. After two consecutive autoplay songs
+by one artist, a different acceptable artist is preferred; the same artist is allowed only
+if no alternative remains. Dropdown lists contain at most two songs per main artist.
+If no acceptable candidate remains, playback stops instead of choosing rejected material.
+
+Tune `RECENT_SONG_MEMORY_SIZE` and `AUTOPLAY_VERSION_KEYWORDS` in `src/song-identity.js`;
+`AUTOPLAY_SCORE_WEIGHTS`, `AUTOPLAY_MAX_CONSECUTIVE_ARTIST`, `SUGGESTIONS_MAX_PER_ARTIST`,
+`MIX_CACHE_TTL_MS`, `MIX_ENTRY_LIMIT` and `AUTOPLAY_LOOKUP_TIMEOUT_MS` in
+`src/autoplay-candidates.js`; and `AUTOPLAY_REJECT_KEYWORDS` in `src/music-utils.js`.
+Mix recommendations and script matching are theme heuristics, not an audio genre/language
+classifier. Mixes may drift off-theme, metadata can be missing, and extra extraction/search
+requests can encounter YouTube rate limits. No API key or new environment setting is required.
 
 
 ## Song transitions

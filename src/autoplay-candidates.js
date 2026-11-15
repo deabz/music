@@ -34,18 +34,21 @@ function recentTracks(state, seed) {
 }
 function rankAutoplayCandidates(entries, state, seed, weights = AUTOPLAY_SCORE_WEIGHTS) {
   const blocked = blockedSongKeys(state, seed);
+  const knownTitles = new Set([...(state.autoplayMemory?.entries || []).map(entry => entry.titleKey),
+    ...[seed, state.current, ...(state.queue || [])].filter(Boolean).map(track => songIdentity(track).titleKey)].filter(Boolean));
   const urls = new Set([...(state.autoplayMemory?.urls() || []), ...(state.autoplayTriedUrls || []), seed?.url,
     state.current?.url, ...(state.queue || []).map(track => track.url)]);
   const videos = new Set([...urls].map(url => videoId({ url })).filter(Boolean));
   const recent = recentTracks(state, seed);
   const artists = recent.slice(0, 2).map(track => songIdentity(track).artistKey);
   const durations = recent.map(track => track.duration).filter(Number.isFinite).sort((a, b) => a - b);
-  const median = durations.length ? durations[Math.floor(durations.length / 2)] : 0;
+  const median = durations.length ? (durations[Math.floor((durations.length - 1) / 2)] + durations[Math.floor(durations.length / 2)]) / 2 : 0;
   const script = scriptOf(songIdentity(seed).title);
   const grouped = new Map();
   for (const entry of entries) {
     const track = candidateTrack(entry), identity = songIdentity(track);
-    if (!identity.key || blocked.has(identity.key) || urls.has(track.url) || (videoId(track) && videos.has(videoId(track))) || track.duration < 60 || hasVersion(`${track.title} ${track.author}`)
+    const ambiguousUploader = !/\s[-\u2013\u2014]\s/.test(track.title || "") && !track.artist && /lyrics?|uploader|daily|records?|music\s*channel/i.test(track.author);
+    if (!identity.key || blocked.has(identity.key) || (ambiguousUploader && knownTitles.has(identity.titleKey)) || urls.has(track.url) || (videoId(track) && videos.has(videoId(track))) || track.duration < 60 || hasVersion(`${track.title} ${track.author}`)
       || !isSongResult({ ...track, channel: { name: track.author }, durationInSec: track.duration })) continue;
     const previous = grouped.get(identity.key);
     const mixSeeds = [...new Set([...(previous?.mixSeeds || []), ...(track.mixSeeds || [])])];
@@ -114,7 +117,9 @@ class AutoplayCandidates {
     this.cache.delete(seedId); return null;
   }
   list(seed, signal) {
+    const cancelGeneration = this.cancelGeneration;
     const pending = this.chain.catch(() => {}).then(async () => {
+      if (this.disposed || cancelGeneration !== this.cancelGeneration) return [];
       const controller = new AbortController();
       const cancel = () => controller.abort();
       if (signal?.aborted) return [];
@@ -160,8 +165,8 @@ class AutoplayCandidates {
     });
     this.chain = pending; return pending;
   }
-  cancel() { this.active?.abort(); }
-  dispose() { this.cancel(); this.cache.clear(); }
+  cancel() { this.cancelGeneration = (this.cancelGeneration || 0) + 1; this.active?.abort(); }
+  dispose() { this.disposed = true; this.cancel(); this.cache.clear(); }
 }
 module.exports = { AutoplayCandidates, rankAutoplayCandidates, buildThemeQueries, fetchMix, candidateTrack, scriptOf, videoId,
   chooseAutoplayCandidate, limitSuggestionArtists, AUTOPLAY_MAX_CONSECUTIVE_ARTIST, SUGGESTIONS_MAX_PER_ARTIST,

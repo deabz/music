@@ -6,7 +6,7 @@ const storage = require("./storage");
 const { FavouritesStore } = require("./favourites");
 const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
-const { SongMemory, blockedSongKeys, songKey } = require("./song-identity");
+const { SongMemory, blockedSongKeys, songKey, RECENT_SONG_MEMORY_SIZE } = require("./song-identity");
 const { chooseAutoplayCandidate } = require("./autoplay-candidates");
 const { createPlayerPanel, buildPlayConfirmation, formatTrackTitle, short } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
@@ -510,7 +510,7 @@ class GuildMusic {
     this.suggestionGeneration = generation;
     const current = sourceTrack;
     if (current.url) this.autoplayTriedUrls.add(current.url);
-    while (this.autoplayTriedUrls.size > 50) this.autoplayTriedUrls.delete(this.autoplayTriedUrls.values().next().value);
+    while (this.autoplayTriedUrls.size > RECENT_SONG_MEMORY_SIZE) this.autoplayTriedUrls.delete(this.autoplayTriedUrls.values().next().value);
     const controller = new AbortController();
     this.suggestionAbort = controller;
     const suggestionTask = this.suggestions
