@@ -345,7 +345,7 @@ test("prefetched track is reused without another spawn and stop cancels both pip
   const jobs = [];
   const GuildMusic = guildMusicClass({ createAudioPipeline() {
     spawned++;
-    const job = { stream: {}, inputType: "webm/opus", rate: 1, cancel() { cancelled++; } };
+    const job = { stream: {}, formatReady: true, inputType: "webm/opus", rate: 1, cancel() { cancelled++; } };
     jobs.push(job); return job;
   }, createAudioResource: () => ({ volume: { setVolume() {} } }) });
   const state = Object.create(GuildMusic.prototype);
@@ -583,4 +583,22 @@ test("identified non-403 download errors do not retry even within three seconds"
   state.playNext = () => assert.fail("429 must not be retried");
   state.failPlayback(state.current, new Error("429"));
   assert.equal(state.current, null);
+});
+
+
+test("stop during format probing cannot play a stale resource or start a duplicate track", async () => {
+  let spawned = 0, played = 0, release;
+  const GuildMusic = guildMusicClass({ createAudioPipeline() {
+    spawned++;
+    return { ready: new Promise(r => { release = r; }), cancel() { this.intentionallyAborted = true; release(); } };
+  }, createAudioResource: () => assert.fail("Cancelled probe must not make a resource") });
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { guild: { id: "test" }, queue: [{ title: "first" }, { title: "second" }],
+    totalTracksPlayed: 0, player: { play() { played++; }, stop() {} } });
+  const first = state.playNext();
+  await state.playNext();
+  assert.equal(spawned, 1);
+  state.stop();
+  await first;
+  assert.equal(played, 0); assert.equal(state.current, null);
 });

@@ -460,12 +460,14 @@ class GuildMusic {
       job.onFailure = error => {
         if (this.activePipeline === job && !job.cancelled) this.failPlayback(next, error);
       };
+      if (!job.formatReady) await job.ready;
+      if (this.activePipeline !== job || job.intentionallyAborted) return;
       if (job.error) throw job.error;
       const resource = createAudioResource(job.stream, { inputType: job.inputType, inlineVolume: true });
       this.resource = resource;
       this.resourcePlaybackRate = job.rate;
       resource.volume.setVolume(this.volume / 100);
-      console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""}`);
+      console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""} input=${job.inputType}`);
       this.player.play(resource);
       scheduleMusicSave();
     } catch (error) { this.failPlayback(next, error); }
