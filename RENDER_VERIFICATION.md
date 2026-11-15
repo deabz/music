@@ -327,4 +327,55 @@ must verify the patched lock before deployment.
 
 The first restricted network audit attempt returned an error response, not a clean
 audit. The unrestricted read-only audit above was the successful verification.
-Final patched-lock Linux/image results are recorded below after execution.
+### Final patched-lock results and release status
+
+Run https://github.com/deabz/music/actions/runs/43745798706 tested
+4cac6a7b4a8cf4266497c3058777385bfd652f98. Node 22 and Node 24 jobs BOTH PASSED.
+Each installed the patched lock from scratch, passed all 248 tests, source checks,
+full-history scanning, zero-vulnerability production audit and real-process runtime
+smoke. Node 22 rebuilt the production Docker image successfully and passed the
+offline container smoke. Container public diagnostics again reported YouTube OK
+(search=3, audio=262144 bytes), gateway HTTP 200, FFmpeg/yt-dlp/Python available,
+and both UDP DNS replies. No deployment credential was used.
+
+Additional executed browser commands:
+
+* node scripts/home-fixes-check.cjs: PASS, seven reported scenario groups, both
+  themes across seven widths; interactions, hidden/offscreen cancellation, title
+  layout/accessibility and reduced motion; zero console errors.
+* node scripts/artwork-check.cjs: PASS, ten reported scenario groups including
+  artwork privacy/allowlists, referrer behavior, decode failure, responsive layout
+  and reduced motion; zero console errors.
+* npm audit --audit-level=low: PASS, zero vulnerabilities including development
+  dependencies in the lock. The CI production audit is also a required gate.
+* Get-CimInstance filtered by ffmpeg.exe / yt-dlp.exe: no remaining local audio
+  tool processes after the smoke checks. No unrelated processes were terminated.
+
+Commits on render-ready: db5c963 adds verification tooling and fixes the Render
+branch; 4cac6a7 patches the HTTP dependency and enforces the advisory gate. A final
+documentation-only commit records this evidence. Normal non-force pushes target
+render-ready only, after fetching that branch and checking ancestry. No main
+modification, merge, rebase, amend, attribution trailer or history rewrite occurred.
+No local source/dependency changes remain outside these commits.
+
+Latest evidence supersedes the earlier pending Linux/build/publication entries:
+
+| Verification area | Current result |
+| --- | --- |
+| Windows automated suite | PASS: 248 tests, zero failures/skips. |
+| Clean Ubuntu Node 22 / Node 24 | PASS: 248 tests each, source checks and real-process smoke. |
+| Production Linux Docker image | PASS: build and unprivileged offline runtime smoke, using patched lock. |
+| Dependency advisories | PASS: no known advisories from current npm audit; not a guarantee against unknown issues. |
+| Secrets | PASS with original precise reviews; scanner source and detection rules unchanged. |
+| Browser integration | PASS: site, home and artwork suites, synthetic data/local HTTP only. |
+| Public YouTube / gateway / DNS | PASS on this PC and GitHub's Linux image; not a Render or audible voice result. |
+| Discord startup/intents/interactions/errors | Offline tests PASS; live bot authentication, installation, registration and channel permissions PENDING. |
+| Discord audible voice and long sessions | PENDING: token, approved channels and live human checks needed. |
+| Render configuration | Branch, Docker command, PORT/all-interface handling, health semantics and documented env checked; actual service PENDING. |
+| Live Supabase / Spotify | PENDING: no authorised feature credentials; existing mock tests retained. |
+
+Status: the project is now Linux/Docker verified and ready for an authorised
+deployment validation. It is NOT fully live release-verified. Required remaining
+access is explicitly listed above and in README; no credentials should be pasted
+into chat. Run LIVE_TEST_CHECKLIST.md on the designated guild after configuring
+the bot securely, then validate the actual Render service and optional database.
