@@ -107,9 +107,10 @@ const buildHelpEmbed = category => {
   return new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle(category === "all" ? "Music | Command guide" : `Music | ${selectedCategories[0].name}`)
-    .setDescription(category === "all"
+    .setDescription((category === "all"
       ? "Use slash commands in Discord. Choose a category with `/help category:<category>`."
       : selectedCategories[0].description)
+      + "\nPlayback controls require the same voice channel as the bot, even for admins. Lyrics and saving/viewing favourites need no voice access; queueing favourites does.")
     .addFields(fields)
     .setFooter({ text: "Command options shown in angle brackets are required." })
     .setTimestamp();

@@ -140,7 +140,22 @@ permission failures log once and wait for an explicit command before retrying.
   the channel truncated first to preserve the source and time. IDs are short tokens, not URLs.
 - Heart adds/removes the current song from your favourites. My favourites opens your private list.
 
-All controls require the bot's voice channel, with Manage Server/Administrator override.
+Playback controls require you to currently be in the same voice channel as the bot,
+even for server owners, Administrators and members with Manage Server. This includes
+pause/resume, previous/next, stop/leave, queue edits, repeat, volume, seeking and
+effects. Suggestions, effects submissions and queueing a saved favourite also
+re-check your current voice state when selected. Outside-channel refusals are private.
+
+Lyrics, saving/removing favourites with the heart, and browsing My favourites do
+not require voice access. Viewing the queue, help, ping, uptime, stats and
+`/nowplaying` remains open to everyone in the server.
+
+`/play`, `/join`, `/247` and search selections cannot take over active playback
+from someone in another voice channel, including when the caller is an admin.
+Idle joining/adding keeps its existing rules. `/247` and
+`/set-notification-channel` still require Manage Server. Dashboard token permissions
+are unchanged. If voice-state data is unavailable after a restart, controls refuse
+until Discord supplies it; a stale member object is never used as an override.
 History and suggestion caches are in memory. Favourites are global per user (maximum 25), saved
 atomically in `data/favourites.json`, independently of guild state, including when guild snapshots
 use Supabase. No database migration is required. A failed favourites load disables writes to protect

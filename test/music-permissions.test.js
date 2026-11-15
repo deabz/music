@@ -58,3 +58,13 @@ test("read-only commands remain open while admin settings retain Manage Server",
     assert.equal(musicAccessError(interaction, state), null);
   }
 });
+
+test("help explains strict voice controls and open lyrics and favourite saving", () => {
+  const { buildHelpEmbed } = require('../src/commands');
+  for (const category of ['all', 'playback', 'queue', 'effects', 'info']) {
+    const embed = buildHelpEmbed(category).toJSON();
+    assert.match(embed.description, /same voice channel.*even for admins/);
+    assert.match(embed.description, /Lyrics and saving\/viewing favourites need no voice access/);
+    assert.match(embed.description, /queueing favourites does/);
+  }
+});
