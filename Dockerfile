@@ -7,7 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --chown=node:node . .
 RUN mkdir -p data && chown node:node data
-ENV NODE_ENV=production PORT=10000
+ENV NODE_ENV=production
 USER node
 EXPOSE 10000
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]

@@ -48,6 +48,7 @@ test("Linux read-only secret source is copied to a private writable temp file", 
 test("Docker and shell line endings remain LF and private files stay outside the build context", () => {
   const docker = fs.readFileSync(require.resolve("../Dockerfile"), "utf8"); assert.ok(!docker.includes("\r"));
   assert.match(docker, /FROM node:22/); assert.match(docker, /python3/); assert.match(docker, /npm ci --omit=dev/);
+  assert.doesNotMatch(docker, /\bPORT\s*=/, "Render supplies PORT at runtime");
   const ignored = fs.readFileSync(require.resolve("../.dockerignore"), "utf8");
   for (const name of [".env", "cookies.txt", "data/", "node_modules/", ".git/", "logs/"]) assert.ok(ignored.split("\n").includes(name));
 });
