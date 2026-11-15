@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const storage = require("./storage");
+const { createPlayerPanel } = require("./player-panel");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { createAudioPipeline } = require("./audio-pipeline");
@@ -9,15 +10,13 @@ const { musicAccessError } = require("./music-permissions");
 const { createSpotifyClient, matchSpotifyTracks } = require("./spotify");
 const {
   buildHelpEmbed,
-  buildNowPlayingEmbed,
   buildPlaybackEmbed,
   buildQueueComponents,
   buildQueueEmbed,
   buildStatsEmbed,
   formatDuration,
   QUEUE_PAGE_SIZE,
-  commands,
-  requesterLabel
+  commands
 } = require("./commands");
 const { createHealthServer } = require("./health-server");
 const { healthPage } = require("./health-page");
@@ -94,7 +93,9 @@ function musicSnapshot(state) {
     queue: state.queue,
     loop: state.loop,
     volume: state.volume,
-    notificationChannelId: state.notificationChannelId
+    notificationChannelId: state.notificationChannelId,
+    panelChannelId: state.panelChannelId || null,
+    panelMessageId: state.panelMessageId || null
   };
 }
 
@@ -108,6 +109,7 @@ async function writeMusicState() {
 }
 
 function scheduleMusicSave() {
+  for (const state of music.values()) state.panel?.scheduleUpdate();
   if (shuttingDown || !musicStateLoaded) return;
   clearTimeout(musicSaveTimer);
   musicSaveTimer = setTimeout(() => {
@@ -147,6 +149,9 @@ class GuildMusic {
     this.emptyTimer = null;
     this.pausedForEmpty = false;
     this.notificationChannelId = null;
+    this.panelChannelId = null;
+    this.panelMessageId = null;
+    this.panel = createPlayerPanel(this, scheduleMusicSave);
     this.playing = false;
     this.totalTracksPlayed = 0;
     this.audioFilters = {
@@ -346,8 +351,14 @@ class GuildMusic {
     finally { this.restorePromise = null; }
   }
 
+  restorePanel(snapshot) {
+    this.panelChannelId = typeof snapshot.panelChannelId === "string" ? snapshot.panelChannelId : null;
+    this.panelMessageId = typeof snapshot.panelMessageId === "string" ? snapshot.panelMessageId : null;
+  }
+
   async restoreState(snapshot, channel) {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid saved snapshot.");
+    this.restorePanel(snapshot);
     this.notificationChannelId = typeof snapshot.notificationChannelId === "string" ? snapshot.notificationChannelId : null;
     this.loop = ["off", "track", "queue"].includes(snapshot.loop) ? snapshot.loop : "off";
     this.volume = Number.isFinite(snapshot.volume) ? Math.max(0, Math.min(200, snapshot.volume)) : config.defaultVolume;
@@ -640,7 +651,6 @@ const client = new Client({
   ]
 });
 const music = new Collection();
-const liveNowPlaying = new Map();
 setInterval(() => {
   if ([...music.values()].some(state => state.current)) scheduleMusicSave();
 }, 5000).unref();
@@ -720,69 +730,6 @@ async function replyWithQueue(context, state) {
   return message;
 }
 
-function liveNowPlayingEmbed(state, options, track = state.current) {
-  const playerStatus = state.player.state.status;
-  const playbackStatus = playerStatus === AudioPlayerStatus.Idle || playerStatus === AudioPlayerStatus.Buffering
-    ? "Starting playback"
-    : playerStatus;
-  return buildNowPlayingEmbed({
-    track,
-    elapsedSeconds: Math.floor(playbackPosition(state)),
-    status: playbackStatus,
-    ...options
-  });
-}
-
-function stopLiveNowPlaying(channelId) {
-  const entry = liveNowPlaying.get(channelId);
-  if (!entry) return;
-  clearTimeout(entry.timer);
-  liveNowPlaying.delete(channelId);
-}
-
-function scheduleLiveNowPlaying(channelId, entry) {
-  entry.timer = setTimeout(async () => {
-    if (liveNowPlaying.get(channelId) !== entry) return;
-    try {
-      await entry.message.edit({ embeds: [liveNowPlayingEmbed(entry.state, entry.options)] });
-    } catch (error) {
-      if (error.code !== 10008) console.error(`[nowplaying:${channelId}] Could not update live message: ${error.message}`);
-      stopLiveNowPlaying(channelId);
-      return;
-    }
-    if (!entry.state.current) {
-      stopLiveNowPlaying(channelId);
-      return;
-    }
-    scheduleLiveNowPlaying(channelId, entry);
-  }, 1000);
-}
-
-async function postLiveNowPlaying(context, state, options = {}) {
-  const { startingTrack, ...liveOptions } = options;
-  const channelId = context.channel.id;
-  const previous = liveNowPlaying.get(channelId);
-  if (previous) {
-    stopLiveNowPlaying(channelId);
-    try {
-      await previous.message.delete();
-    } catch (error) {
-      console.error(`[nowplaying:${channelId}] Could not replace prior live message: ${error.message}`);
-    }
-  }
-
-  if (!state.current) return context.reply("Nothing is playing.");
-  const payload = { embeds: [liveNowPlayingEmbed(state, liveOptions, startingTrack)] };
-  if (context.deferred) await context.editReply(payload);
-  else await context.reply(payload);
-  const message = await context.fetchReply();
-
-  const entry = { message, state, options: liveOptions, timer: null };
-  liveNowPlaying.set(channelId, entry);
-  scheduleLiveNowPlaying(channelId, entry);
-  return message;
-}
-
 const spotify = createSpotifyClient(config);
 
 async function resolveQuery(query) {
@@ -849,12 +796,16 @@ client.once(Events.ClientReady, async ready => {
   for (const [guildId, snapshot] of Object.entries(savedMusicStates)) {
     try {
       if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid guild snapshot.");
-      if (typeof snapshot.voiceChannelId !== "string") continue;
       const guild = await ready.guilds.fetch(guildId);
       if (!guild) continue;
+      const state = getMusic(guild);
+      state.restorePanel?.(snapshot);
+      if (typeof snapshot.voiceChannelId === "string") {
       const channel = await guild.channels.fetch(snapshot.voiceChannelId);
       if (!channel?.isVoiceBased()) throw new Error("Saved voice channel is unavailable.");
-      await getMusic(guild).restore(snapshot, channel);
+      await state.restore(snapshot, channel);
+      }
+      await state.panel?.reattach();
     } catch (error) { console.error(`[persistence:${guildId}] Could not restore music state: ${error.message}`); }
   }
   try {
@@ -886,6 +837,7 @@ const handleCommand = async interaction => {
   }
 
   const state = getMusic(interaction.guild);
+  state.panel?.wake();
   const accessError = musicAccessError(interaction, state);
   if (accessError) return reply(interaction, accessError);
   try {
@@ -912,37 +864,18 @@ const handleCommand = async interaction => {
     if (interaction.commandName === "play") {
       const memberChannel = interaction.member.voice?.channel;
       if (!memberChannel) return reply(interaction, "Join a voice channel first.");
-      await interaction.deferReply();
-
-      // Resolve tracks in the background so we don't block the interaction
-      // and we can respond to the user immediately.
+      await interaction.deferReply({ ephemeral: true });
       const query = interaction.options.getString("query", true);
-
-      // We use a non-blocking wrapper to handle the resolution
-      (async () => {
-        try {
-          const tracks = await resolveQuery(query);
-          if (!tracks.length) throw new Error("No playable tracks were found.");
-          const accessError = musicAccessError(interaction, state);
-          if (accessError) return interaction.editReply(accessError);
-          const wasPlaying = state.playing && state.current;
-          await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
-
-          return postLiveNowPlaying(interaction, state, {
-            title: "Added to the queue",
-            startingTrack: wasPlaying ? state.current : tracks[0],
-            queuedSummary: tracks.length === 1
-              ? tracks[0].title
-              : `${tracks.length} tracks, starting with ${tracks[0].title}`
-          });
-        } catch (error) {
-          console.error(`[command:play] Resolution error: ${error.message}`);
-          return interaction.editReply({ content: "Could not load those tracks. Check the link, duration, and bot configuration; details are in the host logs." });
-        }
-      })();
-
-      return interaction.editReply("Searching for tracks... I'll let you know when they're added!");
+      const tracks = await resolveQuery(query);
+      if (!tracks.length) return interaction.editReply("No playable tracks were found.");
+      const accessError = musicAccessError(interaction, state);
+      if (accessError) return interaction.editReply(accessError);
+      await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
+      await state.panel.ensure(interaction.channel.id);
+      return interaction.editReply(tracks.length === 1
+        ? `Added **${tracks[0].title.slice(0, 100)}** to the queue.` : `Added ${tracks.length} tracks to the queue.`);
     }
+
     if (interaction.commandName === "set-notification-channel") {
       const channel = interaction.options.getChannel("channel", true);
 
@@ -1012,10 +945,9 @@ const handleCommand = async interaction => {
       return reply(interaction, count > 1 ? `Shuffled ${count} queued tracks.` : "Add at least two tracks to the queue to shuffle them.");
     }
     if (interaction.commandName === "nowplaying") {
-      if (!state.current) return reply(interaction, "Nothing is playing.");
-      return postLiveNowPlaying(interaction, state, {
-        requester: requesterLabel(state.current)
-      });
+      await interaction.deferReply({ ephemeral: true });
+      const message = await state.panel.move(interaction.channel.id);
+      return interaction.editReply(message ? "Player panel moved here." : "Could not move the player panel. Check the bot's channel permissions.");
     }
     if (interaction.commandName === "stats") {
       return interaction.reply({
@@ -1178,6 +1110,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
 client.on(Events.GuildDelete, guild => {
   const state = music.get(guild.id);
+  state?.panel?.dispose();
   state?.disconnect();
   music.delete(guild.id);
   delete savedMusicStates[guild.id];
@@ -1360,6 +1293,7 @@ async function shutdown(exitCode = 0) {
   clearTimeout(musicSaveTimer);
   const cleanup = () => {
     for (const state of music.values()) {
+      state.panel?.dispose();
       state.voiceGeneration = (state.voiceGeneration || 0) + 1;
       state.invalidateNext();
       state.cancelActive();
@@ -1368,7 +1302,6 @@ async function shutdown(exitCode = 0) {
       state.connection = null;
       if (connection && connection.state.status !== VoiceConnectionStatus.Destroyed) connection.destroy();
     }
-    for (const channelId of liveNowPlaying.keys()) stopLiveNowPlaying(channelId);
     healthServer.close();
     client.destroy();
   };

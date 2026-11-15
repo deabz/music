@@ -271,6 +271,7 @@ test("every registered slash command dispatches and responds with valid argument
     const responses = [];
     const effects = [];
     const state = {
+      panel: { wake() {}, ensure: async () => {}, move: async () => ({ id: "message" }) },
       invalidateNext() {},
       queueChanged() {},
       current: { title: "Test track", author: "Artist", duration: 120 },

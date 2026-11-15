@@ -8,7 +8,7 @@
     "ytdlp-version": "node scripts/ytdlp-tool.cjs version",
     "update-ytdlp": "node scripts/ytdlp-tool.cjs update",
     "start": "node src/index.js",
-    "check": "node --check src/playback-errors.js && node --check src/ytdlp-tools.js && node --check scripts/ytdlp-tool.cjs && node --check src/music-permissions.js && node --check src/spotify.js && node --check src/audio-pipeline.js && node --check src/index.js && node --check src/storage.js && node --check src/commands.js && node --check src/music-utils.js && node --check src/health-page.js && node --check src/dashboard-page.js && node --check src/health-server.js && node --check src/mentions.js && node --check src/playback-position.js && node --check src/status-page.js && node --check src/site-motion.js",
+    "check": "node --check src/player-panel.js && node --check src/playback-errors.js && node --check src/ytdlp-tools.js && node --check scripts/ytdlp-tool.cjs && node --check src/music-permissions.js && node --check src/spotify.js && node --check src/audio-pipeline.js && node --check src/index.js && node --check src/storage.js && node --check src/commands.js && node --check src/music-utils.js && node --check src/health-page.js && node --check src/dashboard-page.js && node --check src/health-server.js && node --check src/mentions.js && node --check src/playback-position.js && node --check src/status-page.js && node --check src/site-motion.js",
     "test": "node --test",
     "test:website": "node scripts/website-check.cjs"
   },
