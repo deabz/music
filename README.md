@@ -122,7 +122,19 @@ Successful `/play` commands post a public **Title** added to the queue or **N tr
 queue confirmation, with escaped titles and mention notifications disabled. Processing, errors,
 permission refusals, effects menus, and favourites menus remain private. A private processing reply
 is completed before the public confirmation and then removed; it is never the player message.
-The panel is edited in place; `/nowplaying` deletes it and posts a fresh copy in your current channel.
+When a different track instance starts, the panel moves to the bottom of its current channel
+after a 1.5 second debounce. Rapid skips coalesce into one move; if the panel is already
+the newest message, it is edited in place. The new message is sent and its IDs saved
+before the old message is deleted. `/nowplaying` uses the same process in your current channel.
+Set `PANEL_REPOST_ON_TRACK_CHANGE = false` in `src/player-panel.js` to disable automatic
+reposting; `PANEL_REPOST_DELAY_MS` controls the delay. No environment variable is needed.
+Pause, volume, queue edits, suggestions, effects, seek/retries, same-track loop replay,
+startup restoration, and going idle continue editing in place. Repeated copies of the
+same song in the queue have separate instance IDs.
+Sending failures keep the existing panel and fall back to editing; deletion failures
+are ignored. Missing channels clear the stored panel IDs. A crash or failed deletion
+can leave an old duplicate; additional sends/deletes are subject to Discord rate limits
+and require channel permissions.
 Channel/message IDs are saved in the existing guild snapshot backend and reattached on restart.
 Grant the bot View Channel, Read Message History, Send Messages, and Embed Links in the panel channel.
 Missing messages are replaced when needed. Updates debounce for 800 ms and serialize per server;

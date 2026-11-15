@@ -28,6 +28,7 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
     if (denied) { await privateReply(interaction, denied); return true; }
     if (!temporary && state.panelMessageId && interaction.message?.id !== state.panelMessageId) {
       await privateReply(interaction, "This is an old panel. Use /nowplaying to bring back the current player.");
+      state.panel?.wake();
       return true;
     }
     if (action === "next" && skipping.has(state)) {

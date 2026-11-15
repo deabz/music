@@ -56,7 +56,7 @@ async function loadAll() {
   return fileGuilds;
 }
 
-async function saveGuilds(snapshotsByGuildId) {
+async function saveGuilds(snapshotsByGuildId, { throwOnError = false } = {}) {
   if (!loaded) return;
   if (useSupabase) {
     try {
@@ -74,6 +74,7 @@ async function saveGuilds(snapshotsByGuildId) {
       if (error) throw error;
       for (const [guildId, serialized] of changed) savedSnapshots.set(guildId, serialized);
     } catch (error) {
+      if (throwOnError) throw error;
       console.error(`[persistence] Could not save music state to Supabase: ${error.message}`);
     }
     return;

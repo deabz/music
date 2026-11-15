@@ -1,5 +1,7 @@
 
 const PANEL_PREFIX = "panel:";
+const PANEL_REPOST_ON_TRACK_CHANGE = true;
+const PANEL_REPOST_DELAY_MS = 1500;
 const PANEL_SUGGESTION_COUNT = 5;
 const short = (value, limit) => {
   const text = String(value || "Unknown track").replace(/[\u0000-\u001f\u007f]+/g, " ");
@@ -8,7 +10,7 @@ const short = (value, limit) => {
   for (const character of text) { if (result.length + character.length > limit - 1) break; result += character; }
   return result + "\u2026";
 };
-const markdown = value => String(value).replace(/[\\[\]()*_~`|]/g, "\\$&");
+const markdown = value => String(value).replace(/[\\[\]*_~`|]/g, "\\$&");
 const escapePanelText = value => markdown(value).replace(/@(?=everyone\b|here\b|[!&]?\d+)/gi, "@\u200b");
 function trackLink(track) {
   const title = escapePanelText(short(track.title, 50));
@@ -88,10 +90,35 @@ class PlayerPanel {
     if (this.state.panelChannelId === channelId && this.state.panelMessageId === messageId) return;
     this.state.panelChannelId = channelId;
     this.state.panelMessageId = messageId;
-    this.onIdentity();
+    return this.onIdentity();
+  }
+  trackStarted(track, { restoring = false } = {}) {
+    const id = this.identifyTrack(track);
+    const changed = id !== this.trackInstanceId;
+    this.trackInstanceId = id;
+    if (!PANEL_REPOST_ON_TRACK_CHANGE || restoring || !changed || !this.state.panelMessageId) return;
+    this.clearTimer(this.timer);
+    this.clearTimer(this.repostTimer);
+    this.repostPending = true;
+    const generation = this.repostGeneration = (this.repostGeneration || 0) + 1;
+    this.repostTimer = this.setTimer(() => {
+      this.repostTimer = null;
+      void this.serialize(async () => {
+        if (generation !== this.repostGeneration) return null;
+        this.repostPending = false;
+        if (!this.state.current) return this.update(true);
+        return this.replace(this.state.panelChannelId, true);
+      });
+    }, PANEL_REPOST_DELAY_MS);
+    this.repostTimer?.unref?.();
+  }
+  identifyTrack(track) {
+    return track.panelInstanceId ||= require("node:crypto").randomUUID();
   }
   wake() { if (this.blocked) this.signature = null; this.blocked = false; this.scheduleUpdate(); }
   scheduleUpdate() {
+    if (this.repostPending && !this.state.current) this.cancelRepost();
+    if (this.repostPending) return;
     if (this.disposed || this.blocked || !this.state.panelChannelId) return;
     if (JSON.stringify(buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() })) === this.signature) return;
     this.clearTimer(this.timer);
@@ -112,14 +139,14 @@ class PlayerPanel {
   }
   flush(create = true) {
     this.clearTimer(this.timer); this.timer = null;
-    return this.serialize(() => this.update(create));
+    return this.serialize(() => this.repostPending ? null : this.update(create));
   }
   async update(create) {
     const channelId = this.state.panelChannelId;
     if (!channelId) return null;
-    const channel = await this.getChannel(channelId);
+    const channel = await this.channel(channelId);
     if (this.disposed) return null;
-    if (!channel?.send || !channel.messages?.fetch) throw new Error("Panel channel is unavailable.");
+    if (!channel) return null;
     let message = null;
     if (this.state.panelMessageId) {
       try { message = await channel.messages.fetch(this.state.panelMessageId); }
@@ -127,7 +154,7 @@ class PlayerPanel {
       if (message && message.author?.id && message.author.id !== this.state.guild?.client?.user?.id) throw new Error("Stored panel is not owned by this bot.");
       if (!message) {
         this.signature = create ? null : JSON.stringify(buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() }));
-        this.identity(channelId, null);
+        await this.identity(channelId, null);
       }
     }
     if (this.disposed) return null;
@@ -139,7 +166,7 @@ class PlayerPanel {
       catch (error) {
         if (error.code !== 10008) throw error;
         this.signature = create ? null : signature;
-        this.identity(channelId, null);
+        await this.identity(channelId, null);
         return create ? this.send(channel, payload, signature) : null;
       }
       this.signature = signature;
@@ -152,31 +179,67 @@ class PlayerPanel {
     const message = await channel.send(payload);
     if (this.disposed) { await message.delete().catch(() => {}); return null; }
     this.signature = signature;
-    this.identity(channel.id, message.id);
+    await this.identity(channel.id, message.id);
+    return message;
+  }
+  async channel(id) {
+    try {
+      const channel = await this.getChannel(id);
+      if (channel?.send && channel.messages?.fetch) return channel;
+    } catch (error) {
+      if (![10003, 10004, 50001].includes(error.code)) throw error;
+    }
+    await this.identity(null, null);
+    return null;
+  }
+  cancelRepost() {
+    this.clearTimer(this.repostTimer);
+    this.repostTimer = null;
+    this.repostPending = false;
+    this.repostGeneration = (this.repostGeneration || 0) + 1;
+  }
+  async replace(channelId, onlyIfBuried = false) {
+    if (!channelId) return null;
+    const oldChannelId = this.state.panelChannelId;
+    const oldMessageId = this.state.panelMessageId;
+    const channel = await this.channel(channelId);
+    if (!channel || this.disposed) return null;
+    if (onlyIfBuried && channel.lastMessageId === oldMessageId) return this.update(true);
+    const payload = buildPlayerPanel(this.state, { avatarUrl: this.avatarUrl?.() });
+    let message;
+    try { message = await channel.send(payload); }
+    catch (error) {
+      this.log(`[panel:${this.state.guild?.id}] Repost failed; keeping existing panel: ${error.message || error.code}`);
+      try { return await this.update(false); }
+      catch { this.blocked = true; return null; }
+    }
+    if (this.disposed) { await message.delete().catch(() => {}); return null; }
+    // Await durable identity before deleting: a failed save leaves the old panel intact.
+    await this.identity(channel.id, message.id);
+    this.signature = JSON.stringify(payload);
+    if (oldMessageId) {
+      try {
+        const oldChannel = oldChannelId === channel.id ? channel : await this.getChannel(oldChannelId);
+        await (await oldChannel.messages.fetch(oldMessageId)).delete();
+      } catch { /* An obsolete panel is safe to leave behind. */ }
+    }
     return message;
   }
   ensure(channelId) {
     this.blocked = false;
     return this.serialize(async () => {
-      if (!this.state.panelChannelId) this.identity(channelId, null);
+      if (!this.state.panelChannelId) await this.identity(channelId, null);
       return this.update(true);
     });
   }
   move(channelId) {
     this.blocked = false;
     this.clearTimer(this.timer);
-    return this.serialize(async () => {
-      if (this.state.panelChannelId && this.state.panelMessageId) {
-        const oldChannel = await this.getChannel(this.state.panelChannelId);
-        try { await (await oldChannel.messages.fetch(this.state.panelMessageId)).delete(); }
-        catch (error) { if (error.code !== 10008) throw error; }
-      }
-      this.identity(channelId, null); this.signature = null;
-      return this.update(true);
-    });
+    this.cancelRepost();
+    return this.serialize(() => this.replace(channelId));
   }
   reattach() { this.signature = null; return this.flush(false); }
-  dispose() { this.disposed = true; this.clearTimer(this.timer); }
+  dispose() { this.disposed = true; this.clearTimer(this.timer); this.cancelRepost(); }
 }
 function createPlayerPanel(state, onIdentity) {
   return new PlayerPanel(state, { getChannel: id => state.guild.channels.fetch(id),
@@ -199,4 +262,4 @@ function buildPlayConfirmation(tracks) {
     : `**${tracks.length} tracks** added to the queue`,
   ephemeral: false, allowedMentions: { parse: [], users: [], roles: [], repliedUser: false } };
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, buildPlayConfirmation, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, short, escapePanelText };
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, buildPlayConfirmation, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, PANEL_REPOST_ON_TRACK_CHANGE, PANEL_REPOST_DELAY_MS, short, escapePanelText };

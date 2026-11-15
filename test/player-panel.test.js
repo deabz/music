@@ -123,7 +123,7 @@ test("waiting titles truncate at forty characters and hostile markdown/mentions 
   const payload = buildPlayerPanel(state);
   const text = payload.embeds[0].description;
   assert.ok(text.includes("A".repeat(39) + "\u2026"));
-  assert.ok(text.includes("\\[Fake\\]\\(bad\\)\\*"));
+  assert.ok(text.includes("\\[Fake\\](bad)\\*"));
   assert.ok(!text.includes("@everyone")); assert.ok(!text.includes("@here"));
   assert.ok(text.length <= 4096);
   assert.equal(payload.allowedMentions.parse.length, 0);

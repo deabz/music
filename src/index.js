@@ -104,13 +104,16 @@ function musicSnapshot(state) {
   };
 }
 
-async function writeMusicState() {
-  if (!musicStateLoaded) return;
+async function writeMusicState(options) {
+  if (!musicStateLoaded) {
+    if (options?.throwOnError) throw new Error("Music storage has not loaded; retaining old panel.");
+    return;
+  }
   const guilds = {
     ...savedMusicStates,
     ...Object.fromEntries([...music].map(([guildId, state]) => [guildId, musicSnapshot(state)]))
   };
-  await storage.saveGuilds(guilds);
+  await storage.saveGuilds(guilds, options);
 }
 
 function scheduleMusicSave() {
@@ -122,6 +125,12 @@ function scheduleMusicSave() {
       .then(writeMusicState)
       .catch(error => console.error(`[persistence] Could not save music state: ${error.message}`));
   }, 1000);
+}
+
+function persistPanelIdentity() {
+  scheduleMusicSave();
+  musicSaveChain = musicSaveChain.catch(() => {}).then(() => writeMusicState({ throwOnError: true }));
+  return musicSaveChain;
 }
 
 async function loadMusicState() {
@@ -157,7 +166,7 @@ class GuildMusic {
     this.notificationChannelId = null;
     this.panelChannelId = null;
     this.panelMessageId = null;
-    this.panel = createPlayerPanel(this, scheduleMusicSave);
+    this.panel = createPlayerPanel(this, persistPanelIdentity);
     this.suggestions = new PanelSuggestions(this, { changed: () => this.panel.scheduleUpdate() });
     this.panelSuggestions = null;
     this.playing = false;
@@ -309,7 +318,7 @@ class GuildMusic {
     this.invalidateNext();
     await this.connect(voiceChannel);
     if (this.queue.length + items.length > config.maxQueueSize) throw new Error("The queue is full.");
-    this.queue.push(...items.map(track => ({ ...track, requestedById: requesterId })));
+    this.queue.push(...items.map(({ panelInstanceId, ...track }) => ({ ...track, requestedById: requesterId })));
     this.autoplayTriedUrls.clear();
     if (!this.notificationChannelId) this.notificationChannelId = notificationChannel?.id || null;
     if (this.playing) this.prepareNext();
@@ -478,6 +487,7 @@ class GuildMusic {
       scheduleMusicSave();
       return;
     }
+    this.panel?.identifyTrack(next);
     this.current = next;
     this.suggestions?.load(next);
     this.resumeOffsetSeconds = Number.isFinite(next.resumeAtSeconds) ? next.resumeAtSeconds : 0;
@@ -509,6 +519,7 @@ class GuildMusic {
       resource.volume.setVolume(this.volume / 100);
       console.log(`[${new Date().toISOString()}] [stream:${this.guild.id}] Starting ${next.title}${prepared ? " (prefetched)" : ""} input=${job.inputType}`);
       this.player.play(resource);
+      this.panel?.trackStarted(next, { restoring: Boolean(this.restorePromise) });
       scheduleMusicSave();
     } catch (error) {
       if ((!job || this.activePipeline === job) && !job?.intentionallyAborted) this.failPlayback(next, error);

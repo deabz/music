@@ -57,6 +57,15 @@ function remoteStore(rows = []) {
   return { ...module, calls, failures };
 }
 
+test("strict panel identity saves propagate errors and remain retryable", async () => {
+  const f = remoteStore(); await f.storage.loadAll();
+  f.failures.throwSave = true;
+  await assert.rejects(f.storage.saveGuilds({ guild: { panelMessageId: "new" } }, { throwOnError: true }), /Network unavailable/);
+  f.failures.throwSave = false;
+  await f.storage.saveGuilds({ guild: { panelMessageId: "new" } }, { throwOnError: true });
+  assert.equal(f.calls.saves.length, 2);
+});
+
 test("Supabase prefers the new secret key and supports the legacy variable", async () => {
   for (const [keys, expected] of [
     [{ SUPABASE_SECRET_KEY: "test-secret", SUPABASE_SERVICE_ROLE_KEY: "test-legacy" }, "test-secret"],
