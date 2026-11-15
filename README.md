@@ -158,11 +158,24 @@ as an experimental feature; the current fallback adds no PCM mixer or extra deco
 ## Persistent Discord player panel
 
 Each server has one normal bot message with a gold queue embed, suggestions, and three button rows.
-The title counts current plus waiting tracks. The current song is a linked title (about 50 characters),
+The title counts current plus waiting tracks. The current song is a full linked title,
 with its duration on the first line and requester on the second. A separate **Up Next:** section shows
-up to ten waiting songs: code-styled positions starting at 1, bold unlinked titles (about 40 characters),
+up to ten waiting songs: code-styled positions starting at 1, full bold unlinked titles,
 duration, and requester. Extra waiting songs use an "...and N more" line. Autoplay is labelled Autoplay;
 the footer shows the bot avatar and volume. Track titles have no decorative prefixes.
+Long titles wrap naturally. One exported `TRACK_TITLE_MAX_LENGTH = 200` in
+`src/player-panel.js` caps broken/hostile metadata before escaping. The description
+has a 4096-character budget and reserves the remaining-count line; whole waiting
+rows are omitted when they cannot fit. Unicode pairs, markdown escapes and link
+syntax remain intact. `/queue` uses the same title cap and budget-aware pages of up
+to ten complete tracks, so no waiting tracks disappear between pages. Confirmations,
+failure notices, pause/resume embeds and lyrics headings share the cap; lyrics use
+fields when the full title cannot fit the 256-character heading. Suggestions,
+favourites and search option labels retain Discord's hard 100-character limit with
+an ellipsis; the full capped title appears in the confirmation/panel after selection.
+Option descriptions retain channel/artist and duration rather than squeezing in
+another partial title. Stored favourites retain their existing 500-character metadata
+limit; presence retains its separate 128-character display limit.
 Successful `/play` commands post a public **Title** added to the queue or **N tracks** added to the
 queue confirmation, with escaped titles and mention notifications disabled. Processing, errors,
 permission refusals, effects menus, and favourites menus remain private. A private processing reply

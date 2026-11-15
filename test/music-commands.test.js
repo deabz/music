@@ -594,6 +594,7 @@ test("search menu uses bounded values and reports selection failures ephemerally
   });
   const option = payload.components[0].toJSON().components[0].options[0];
   assert.equal(option.value, "0");
+  assert.equal(option.label.length, 100); assert.ok(option.label.endsWith("\u2026"));
   assert.equal(option.description.length, 100);
   const selection = {
     user: { id: "user" }, values: ["0"], member: { voice: { channel: {} } },
