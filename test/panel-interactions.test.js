@@ -52,6 +52,30 @@ test("lyrics are private, stale panels are rejected, and errors never expose lib
   assert.equal(failed.calls[0], "defer"); assert.ok(!JSON.stringify(failed.calls).includes("PRIVATE_PATH"));
 });
 
+test("Next double clicks claim the guild before deferring, acknowledge both and release after failure", async () => {
+  const f = fixture("next"); let release, skips = 0;
+  f.interaction.deferUpdate = () => new Promise(resolve => { release = resolve; });
+  f.state.skip = async () => { skips++; throw null; };
+  const first = f.handler(f.interaction);
+  const second = { ...f.interaction, reply: async payload => { assert.equal(payload.ephemeral, true); assert.match(payload.content, /already in progress/); } };
+  await f.handler(second); assert.equal(skips, 0);
+  release(); await first; assert.equal(skips, 1);
+  assert.equal(f.calls.at(-1).ephemeral, true); assert.match(f.calls.at(-1).content, /Could not use/);
+  f.interaction.deferUpdate = async () => {}; f.state.skip = async () => { skips++; };
+  await f.handler(f.interaction); assert.equal(skips, 2);
+});
+
+test("errors before acknowledgement use a generic private reply, with follow-up after acknowledgement", async () => {
+  for (const acknowledged of [false, true]) {
+    const f = fixture("next");
+    f.state.panel.wake = () => { throw new Error("PRIVATE_PATH"); };
+    f.interaction.deferred = acknowledged;
+    await f.handler(f.interaction);
+    assert.equal(f.calls.at(-1).ephemeral, true); assert.match(f.calls.at(-1).content, /Could not use/);
+    assert.ok(!JSON.stringify(f.calls).includes("PRIVATE_PATH"));
+  }
+});
+
 
 test("effects menu preselects enabled filters and submits one exact set including empty", async () => {
   const f = fixture("effects"); f.state.audioFilters = { echo: true };

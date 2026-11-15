@@ -9,6 +9,7 @@ const ACTION_PERMISSIONS = {
 };
 const privateReply = (interaction, content) => interaction.reply({ content, ephemeral: true, allowedMentions: { parse: [] } });
 function createPanelInteractionHandler({ getMusic, isReady = () => true, favourites, lyrics, log = console.error } = {}) {
+  const skipping = new WeakSet();
   const handle = async interaction => {
     if (!interaction.customId?.startsWith(PANEL_PREFIX) || !(interaction.isButton?.() || interaction.isStringSelectMenu?.())) return false;
     if (!interaction.guild || !isReady()) {
@@ -29,6 +30,11 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
       await privateReply(interaction, "This is an old panel. Use /nowplaying to bring back the current player.");
       return true;
     }
+    if (action === "next" && skipping.has(state)) {
+      await privateReply(interaction, "A skip is already in progress."); return true;
+    }
+    if (action === "next") skipping.add(state);
+    try {
     state.panel?.wake();
     if (action === "effects") {
       await interaction.reply({ content: "Choose exactly the effects you want enabled.", ephemeral: true,
@@ -96,15 +102,18 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
       else await interaction.followUp({ content: "This control is not available yet.", ephemeral: true });
       state.panel?.scheduleUpdate();
     } catch (error) {
-      log(`[panel:${interaction.guild.id}:${action}] ${error.stack || error.message}`);
-      await interaction.followUp({ content: "Could not use that control. Try again or check the bot's permissions.", ephemeral: true }).catch(() => {});
+      log(`[panel:${interaction.guild.id}:${action}] ${error?.stack || error?.message || String(error)}`);
+      await interaction.followUp({ content: "Could not use that control. Try again or check the bot's permissions.", ephemeral: true, allowedMentions: { parse: [] } }).catch(() => {});
     }
     return true;
+    } finally {
+      if (action === "next") skipping.delete(state);
+    }
   };
   return async interaction => {
     try { return await handle(interaction); }
     catch (error) {
-      log(`[panel:${interaction.guild?.id || "unknown"}] Interaction failed: ${error.stack || error.message}`);
+      log(`[panel:${interaction.guild?.id || "unknown"}] Interaction failed: ${error?.stack || error?.message || String(error)}`);
       const payload = { content: "Could not use that control. Please try again.", ephemeral: true, allowedMentions: { parse: [] } };
       try {
         if (interaction.deferred || interaction.replied) await interaction.followUp(payload);
