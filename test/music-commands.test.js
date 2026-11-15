@@ -30,6 +30,7 @@ function commandHandler(state, overrides = {}) {
   const start = source.indexOf("const handleCommand =");
   const end = source.indexOf("\nclient.on(Events.VoiceStateUpdate", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nhandleCommand;`, {
+    buildPlayConfirmation: require("../src/player-panel").buildPlayConfirmation,
     startupComplete: true, shuttingDown: false,
     getMusic: () => state,
     musicAccessError: () => null,
@@ -304,7 +305,8 @@ test("every registered slash command dispatches and responds with valid argument
       },
       async deferReply() { this.deferred = true; },
       reply: async payload => { responses.push(payload); },
-      editReply: async payload => { responses.push(payload); }
+      editReply: async payload => { responses.push(payload); },
+      followUp: async payload => { responses.push(payload); }, deleteReply: async () => {}
     };
     const handler = commandHandler(state, {
       ...builders, EmbedBuilder, PermissionFlagsBits, buildGeniusSearchUrl,
@@ -671,4 +673,36 @@ test("global interaction listener routes persistent controls before slash dispat
   const handler = eventHandler("InteractionCreate", { handlePanelInteraction: async () => { calls++; return true; },
     handleCommand: () => assert.fail("Panel must not dispatch as a slash command") });
   await handler({}); assert.equal(calls, 1);
+});
+
+
+test("play uses the same panel and publishes safe singular/plural confirmations while processing privately", async () => {
+  for (const count of [1, 3]) {
+    const events = [];
+    const state = { panel: { wake() {}, ensure: async channel => events.push(["panel", channel]) },
+      add: async tracks => events.push(["add", tracks.length]) };
+    const handler = commandHandler(state, { resolveQuery: async () => Array.from({ length: count }, () => ({ title: "**Title** @everyone" })) });
+    const interaction = { guild: {}, commandName: "play", member: { voice: { channel: {} } }, user: { id: "listener" },
+      channel: { id: "invoking" }, options: { getString: () => "query" },
+      deferReply: async value => { interaction.deferred = true; events.push(["defer", value]); },
+      editReply: async value => events.push(["edit", value]), followUp: async value => events.push(["public", value]),
+      deleteReply: async () => events.push(["delete private"]) };
+    await handler(interaction);
+    assert.equal(events[0][1].ephemeral, true);
+    assert.equal(events.filter(event => event[0] === "panel").length, 1);
+    const visible = events.find(event => event[0] === "public")[1];
+    assert.equal(visible.ephemeral, false); assert.equal(visible.allowedMentions.parse.length, 0);
+    assert.equal(visible.content, count === 1 ? "**\\*\\*Title\\*\\* @\u200beveryone** added to the queue" : "**3 tracks** added to the queue");
+    assert.equal(events.at(-1)[0], "delete private");
+  }
+});
+
+test("play errors remain in the private deferred response and never publish a confirmation", async () => {
+  const handler = commandHandler({}, { resolveQuery: async () => { throw new Error("PRIVATE_LIBRARY_DETAILS"); } });
+  let privateResponse;
+  const interaction = { guild: {}, commandName: "play", member: { voice: { channel: {} } }, options: { getString: () => "bad" },
+    deferReply: async options => { assert.equal(options.ephemeral, true); interaction.deferred = true; },
+    editReply: async value => { privateResponse = value; }, followUp: () => assert.fail("Error must stay private") };
+  await handler(interaction);
+  assert.ok(!JSON.stringify(privateResponse).includes("PRIVATE_LIBRARY_DETAILS"));
 });

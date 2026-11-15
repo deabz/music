@@ -4,7 +4,7 @@ const storage = require("./storage");
 const { FavouritesStore } = require("./favourites");
 const favourites = new FavouritesStore();
 const { PanelSuggestions } = require("./panel-suggestions");
-const { createPlayerPanel } = require("./player-panel");
+const { createPlayerPanel, buildPlayConfirmation } = require("./player-panel");
 const { createPanelInteractionHandler } = require("./panel-interactions");
 const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECONDS } = require("./playback-errors");
 const { logYtdlpVersion } = require("./ytdlp-tools");
@@ -869,7 +869,7 @@ client.once(Events.ClientReady, async ready => {
 
 const handleCommand = async interaction => {
   if (!interaction.guild) return;
-  if (!startupComplete || shuttingDown) return reply(interaction, "The bot is still initializing or shutting down. Try again shortly.");
+  if (!startupComplete || shuttingDown) return reply(interaction, { content: "The bot is still initializing or shutting down. Try again shortly.", ephemeral: true });
   if (interaction.commandName === "help") {
     const category = interaction.options.getString("category") || "all";
     return interaction.reply({
@@ -886,7 +886,7 @@ const handleCommand = async interaction => {
   const state = getMusic(interaction.guild);
   state.panel?.wake();
   const accessError = musicAccessError(interaction, state);
-  if (accessError) return reply(interaction, accessError);
+  if (accessError) return reply(interaction, { content: accessError, ephemeral: true });
   try {
     if (interaction.commandName === "bassboost") {
       const enabled = !state.audioFilters.bassboost;
@@ -910,7 +910,7 @@ const handleCommand = async interaction => {
     }
     if (interaction.commandName === "play") {
       const memberChannel = interaction.member.voice?.channel;
-      if (!memberChannel) return reply(interaction, "Join a voice channel first.");
+      if (!memberChannel) return reply(interaction, { content: "Join a voice channel first.", ephemeral: true });
       await interaction.deferReply({ ephemeral: true });
       const query = interaction.options.getString("query", true);
       const tracks = await resolveQuery(query);
@@ -919,8 +919,12 @@ const handleCommand = async interaction => {
       if (accessError) return interaction.editReply(accessError);
       await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
       await state.panel.ensure(interaction.channel.id);
-      return interaction.editReply(tracks.length === 1
-        ? `Added **${tracks[0].title.slice(0, 100)}** to the queue.` : `Added ${tracks.length} tracks to the queue.`);
+      // Finish the private deferral before creating a separate public follow-up.
+      // Discord cannot change the visibility of an existing interaction response.
+      await interaction.editReply({ content: "Tracks queued.", allowedMentions: { parse: [] } });
+      await interaction.followUp(buildPlayConfirmation(tracks));
+      await interaction.deleteReply().catch(() => {});
+      return;
     }
 
     if (interaction.commandName === "set-notification-channel") {

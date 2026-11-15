@@ -194,4 +194,9 @@ function buildFavouritesMenu(tracks, userId) {
     options: tracks.slice(0, 25).map(track => ({ value: track.id, label: short(track.title, 100),
       description: short(`${track.author} - ${duration(track.duration)}`, 100) })) }] }];
 }
-module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, short, escapePanelText };
+function buildPlayConfirmation(tracks) {
+  return { content: tracks.length === 1 ? `**${escapePanelText(short(tracks[0].title, 100))}** added to the queue`
+    : `**${tracks.length} tracks** added to the queue`,
+  ephemeral: false, allowedMentions: { parse: [], users: [], roles: [], repliedUser: false } };
+}
+module.exports = { buildPlayerPanel, PlayerPanel, createPlayerPanel, buildEffectsMenu, buildFavouritesMenu, buildPlayConfirmation, PANEL_PREFIX, PANEL_SUGGESTION_COUNT, short, escapePanelText };
