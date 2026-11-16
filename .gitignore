@@ -6,3 +6,5 @@ cookies.txt
 *.log
 logs/
 data/
+.bot-local/
+stop-bot.flag

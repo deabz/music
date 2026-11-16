@@ -14,7 +14,12 @@
     "scan:secrets": "node scripts/scan-secrets.cjs",
     "test:website": "node scripts/website-check.cjs",
     "test:runtime": "node scripts/runtime-smoke.cjs",
-    "verify:discord": "node scripts/verify-discord.cjs"
+    "verify:discord": "node scripts/verify-discord.cjs",
+    "autostart:install": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/install-autostart.ps1",
+    "autostart:uninstall": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/uninstall-autostart.ps1",
+    "autostart:status": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/status.ps1",
+    "autostart:stop": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/stop-bot.ps1",
+    "autostart:start": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/start-bot.ps1"
   },
   "engines": {
     "node": ">=22.12.0"
