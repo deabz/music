@@ -377,3 +377,84 @@ wrong; use `Artist - Title` to improve matching. Each request times out after
 8 seconds; network failures are not cached. Display uses whole lines, about 3500
 escaped characters per page. A single line exceeding that size is omitted with
 a truncation notice rather than cut in half.
+
+## Windows sign-in startup (nyx)
+
+Run these commands from the repository root in Windows PowerShell 5.1:
+
+```powershell
+npm run autostart:install
+npm run autostart:status
+npm run autostart:stop
+npm run autostart:start
+npm run autostart:uninstall
+```
+
+The single scheduled task is named `nyx`. Installation resolves `node.exe`, saves
+its absolute path in ignored `.bot-local/config.json`, prints the exact task XML,
+and registers the task for the current user without a password or administrator
+rights. Installation does not start it. Startup happens after you sign in to
+Windows, rather than before sign-in. Do not configure automatic Windows login.
+The batch entry point and all management scripts derive the repository location
+from their own paths. Reinstall after moving the repository or Node installation.
+A conflicting task belonging to another repository is never overwritten.
+
+Preview without changing task/configuration:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/install-autostart.ps1 -DryRun
+```
+
+`autostart:start` removes `stop-bot.flag` and explicitly starts the task.
+`autostart:stop` creates that flag and stops only the recorded supervisor (PID and
+creation time must match), whose Windows Job Object kills its child tree.
+The flag persists across sign-ins; remove it using the start command to resume.
+A flag already present prevents launch. A flag created during a run stops it.
+`autostart:status` shows the task state, last run/result, relevant process IDs and
+uptimes, stop flag, log path, and last 20 log lines. It never reads environment
+values. Bot output may contain sensitive information; keep logs private.
+
+Output and timestamped starts/exits go to `logs/bot.log`, rotated before writes
+would exceed 5 MB, with five rotated files (`bot.log.1` through `.5`). All child
+exits without a stop request restart after 10, 30, 60, then 300 seconds, capped
+at 300. A run lasting at least ten minutes resets backoff. Duplicate supervisors
+are prevented with an exclusive repository lock. Before each launch, existing
+Node command lines are checked for this entry point. Unreadable command lines or
+relative `src/index.js` invocations are treated as ambiguous and prevent launch;
+unrelated Node processes are never killed. A concurrently launched external bot
+can race this check; use this setup as the sole launcher for the repository.
+
+A gated PowerShell child is placed in a kill-on-close Windows Job Object before
+it can launch Node. Descendants inherit the job; forced supervisor termination
+also kills them. If job assignment fails, no bot is released. Forced termination
+can leave stale local state and cannot write a final exit log; the next supervisor
+replaces state, and management validates process creation time before stopping.
+Job cleanup is forceful, so asynchronous application cleanup is not guaranteed.
+The task's Hidden setting and hidden PowerShell window are used where supported;
+a brief batch console flash can depend on Windows Task Scheduler behavior.
+
+The bot runs while the PC is on and awake. Sleep, hibernation, shutdown, display
+timeouts, and lid-close behaviour remain exactly as configured. The bot cannot
+stay connected while the PC is asleep or switched off. No power settings are
+queried or changed, and the task does not wake the PC.
+
+Harmless integration tests (no Node, real bot, Discord, `.env`, or cookies):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/test-supervisor.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/autostart/test-installer.ps1
+```
+
+Test mode requires exactly `BOT_SUPERVISOR_TEST=1` and a temporary root containing
+`fake.ps1`, selected with `BOT_TEST_ROOT`. It uses fake PowerShell children and
+one-percent timing. `BOT_TEST_ROTATE=1` reduces rotation size only in test mode.
+All test overrides are ignored in normal operation. The tests check backoff and
+reset, output and exit codes, rotation, duplicate supervisors and bot ownership,
+stop flags, and child-tree cleanup including forced supervisor termination.
+They remove their temporary directories and processes.
+
+To undo the Windows change, run `npm run autostart:uninstall`. It creates the stop
+flag, stops the owned supervisor/child job, and removes only this repository's
+`nyx` task. Logs and `.bot-local` remain for inspection; after uninstall they can
+be deleted, together with `stop-bot.flag`, if no longer wanted. No other Windows
+settings are changed. Repository changes can be undone separately with Git.
