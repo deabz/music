@@ -133,6 +133,7 @@ function musicSnapshot(state) {
     loop: state.loop,
     volume: state.volume,
     notificationChannelId: state.notificationChannelId,
+    lastCommandChannelId: state.lastCommandChannelId || null,
     panelChannelId: state.panelChannelId || null,
     panelMessageId: state.panelMessageId || null
   };
@@ -203,6 +204,7 @@ class GuildMusic {
     this.emptyTimer = null;
     this.pausedForEmpty = false;
     this.notificationChannelId = null;
+    this.lastCommandChannelId = null;
     this.panelChannelId = null;
     this.panelMessageId = null;
     this.panel = createPlayerPanel(this, persistPanelIdentity);
@@ -303,6 +305,61 @@ class GuildMusic {
     } catch { /* restartCurrent already invokes normal handling if both attempts fail. */ }
     try { await recovery.onFailure?.("The stream change failed; previous audio settings were restored if playback could be recovered."); }
     catch { /* Expired interaction tokens must not affect playback recovery. */ }
+  }
+
+  // Music notifications go to the text channel of the latest /join or /play.
+  rememberCommandChannel(channel) {
+    if (channel?.id) this.lastCommandChannelId = channel.id;
+  }
+
+  setMusicChannel(channel) {
+    if (!channel?.id) return false;
+    this.rememberCommandChannel(channel);
+    if (this.notificationChannelId === channel.id) return false;
+    this.notificationChannelId = channel.id;
+    scheduleMusicSave();
+    return true;
+  }
+
+  clearMusicChannel() {
+    if (!this.notificationChannelId) return;
+    this.notificationChannelId = null;
+    scheduleMusicSave();
+  }
+
+  async sendableChannel(id) {
+    if (!id) return null;
+    try {
+      const channel = this.guild.channels?.cache?.get(id) || this.guild.client?.channels?.cache?.get(id)
+        || await this.guild.channels?.fetch?.(id);
+      if (typeof channel?.send !== "function") return null;
+      const me = this.guild.members?.me;
+      const permissions = me && channel.permissionsFor?.(me);
+      if (permissions && !permissions.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages])) return null;
+      return channel;
+    } catch { return null; } // Deleted or inaccessible channel.
+  }
+
+  // Saved music channel first, then the last channel a music command was used in.
+  // Never throws: a missing channel must not affect playback.
+  async notify(payload) {
+    const tried = new Set();
+    for (const id of [this.notificationChannelId, this.lastCommandChannelId]) {
+      if (!id || tried.has(id)) continue;
+      tried.add(id);
+      const channel = await this.sendableChannel(id);
+      if (!channel) continue;
+      try { return await channel.send(payload); }
+      catch (error) { console.error(`[notify:${this.guild.id}] Could not send to channel ${id}: ${error.message}`); }
+    }
+    return null;
+  }
+
+  async restorePanelChannel() {
+    for (const id of [this.notificationChannelId, this.lastCommandChannelId]) {
+      if (this.panelChannelId) return;
+      if (await this.sendableChannel(id)) { await this.panel?.ensure(id); return; }
+    }
   }
 
   async connect(channel) {
@@ -473,6 +530,7 @@ class GuildMusic {
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) throw new Error("Invalid saved snapshot.");
     this.restorePanel(snapshot);
     this.notificationChannelId = typeof snapshot.notificationChannelId === "string" ? snapshot.notificationChannelId : null;
+    if (typeof snapshot.lastCommandChannelId === "string") this.lastCommandChannelId = snapshot.lastCommandChannelId;
     this.loop = ["off", "track", "queue"].includes(snapshot.loop) ? snapshot.loop : "off";
     this.volume = Number.isFinite(snapshot.volume) ? Math.max(0, Math.min(200, snapshot.volume)) : config.defaultVolume;
     this.savedVoiceChannelId = snapshot.voiceChannelId;
@@ -603,6 +661,7 @@ class GuildMusic {
       this.playing = false;
       updatePresence();
       scheduleMusicSave();
+      if (endedTrack) void this.notify({ content: "Queue finished. Add more with `/play`.", allowedMentions: { parse: [] } });
       return;
     }
     this.panel?.identifyTrack(next);
@@ -658,6 +717,8 @@ class GuildMusic {
       };
       if (job.restartError || job.error) throw job.restartError || job.error;
       this.panel?.trackStarted(next, { restoring: Boolean(this.restorePromise) });
+      // The panel's channel was deleted or became unusable: bring it back in the music channel.
+      if (this.panel && !this.panelChannelId) this.restorePanelChannel().catch(() => {});
       scheduleMusicSave();
     } catch (error) {
       if (recoverable && (!job || this.activePipeline === job) && !job?.intentionallyAborted) {
@@ -734,16 +795,12 @@ class GuildMusic {
     }
     if (allowResume && this.canResumeEarly(track, error)) return this.resumeEarlyEnd(track, error);
     if (this.restartRecovery && !this.restartTransaction) return this.rollbackRestart(error);
-    const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
-      || this.guild.client.channels.cache.get(this.guild.systemChannelId);
     // Stop before emitting Idle, so errors cannot enter repeat or autoplay.
     const queued = this.queue;
-    this.stop();
+    this.stop({ keepMusicChannel: true });
     this.queue = queued;
     scheduleMusicSave();
-    channel?.send({ content: `Could not play **${formatTrackTitle(track.title)}**: ${reason.message}. Playback stopped; queued tracks were kept.`, allowedMentions: { parse: [] } }).catch(sendError => {
-      console.error(`[playback:${this.guild.id}] Could not send playback error notice: ${sendError.message}`);
-    });
+    return this.notify({ content: `Could not play **${formatTrackTitle(track.title)}**: ${reason.message}. Playback stopped; queued tracks were kept.`, allowedMentions: { parse: [] } });
   }
 
   isShortStream() {
@@ -766,9 +823,7 @@ class GuildMusic {
     if (retry === 0) {
       return this.playNext(null, { ...track, streamRetry: 1, resumeAtSeconds: this.resumeOffsetSeconds });
     }
-    const channel = this.guild.client.channels.cache.get(this.notificationChannelId)
-      || this.guild.client.channels.cache.get(this.guild.systemChannelId);
-    channel?.send({ content: `Could not play **${formatTrackTitle(track.title)}** after one retry: ${reason.message}. Trying the next queued song if available.`, allowedMentions: { parse: [] } }).catch(() => {});
+    void this.notify({ content: `Could not play **${formatTrackTitle(track.title)}** after one retry: ${reason.message}. Trying the next queued song if available.`, allowedMentions: { parse: [] } });
     this.shortStreamFailures = (this.shortStreamFailures || 0) + 1;
     // Two consecutive exhausted songs indicate a host problem: keep the rest.
     if (this.shortStreamFailures >= 2 || !this.queue.length) {
@@ -870,7 +925,8 @@ class GuildMusic {
     return true;
   }
 
-  stop() {
+  stop({ keepMusicChannel = false } = {}) {
+    if (!keepMusicChannel) this.clearMusicChannel();
     this.playbackGeneration = (this.playbackGeneration || 0) + 1;
     this.restartTransaction = null;
     this.restartRecovery = null;
@@ -931,6 +987,7 @@ class GuildMusic {
     }
     this.connection = null;
     this.savedVoiceChannelId = null;
+    this.clearMusicChannel();
     scheduleMusicSave();
   }
 }
@@ -1137,6 +1194,7 @@ const handleCommand = async interaction => {
   state.panel?.wake();
   const accessError = musicAccessError(interaction, state);
   if (accessError) return reply(interaction, { content: accessError, ephemeral: true });
+  state.rememberCommandChannel?.(interaction.channel);
   const restartCommand = ["bassboost", "eightd", "nightcore", "echo", "forward", "skip"].includes(interaction.commandName);
   if (restartCommand && (state.interactionRestarting || state.restartTransaction || state.skipPromise)) {
     return reply(interaction, { content: "Please wait; a stream restart is in progress.", ephemeral: true });
@@ -1177,8 +1235,11 @@ const handleCommand = async interaction => {
       memberChannel = await resolveMemberVoiceChannel(interaction);
       const accessError = musicAccessError(interaction, state);
       if (accessError || !memberChannel) return interaction.editReply(accessError || "Join a voice channel first.");
+      state.setMusicChannel?.(interaction.channel);
       await state.add(tracks, memberChannel, interaction.user.id, interaction.channel);
-      await state.panel.ensure(interaction.channel.id);
+      // The player panel follows the music channel when /play is used somewhere new.
+      if (state.panelChannelId && state.panelChannelId !== interaction.channel.id) await state.panel.move(interaction.channel.id);
+      else await state.panel.ensure(interaction.channel.id);
       // Finish the private deferral before creating a separate public follow-up.
       // Discord cannot change the visibility of an existing interaction response.
       await interaction.editReply({ content: "Tracks queued.", allowedMentions: { parse: [] } });
@@ -1204,7 +1265,9 @@ const handleCommand = async interaction => {
       const denied = musicAccessError(interaction, state);
       if (denied || !channel) return interaction.editReply(denied || "Join a voice channel first.");
       await state.connect(channel);
-      return interaction.editReply("Connected to your voice channel.");
+      state.setMusicChannel?.(interaction.channel);
+      if (state.panelChannelId && state.panelChannelId !== interaction.channel.id) await state.panel?.move(interaction.channel.id);
+      return interaction.editReply("Connected to your voice channel. Music updates will be posted here.");
     }
     if (interaction.commandName === "247") {
       if (!config.voiceChannelId || !config.voiceGuildId) return reply(interaction, "Set VOICE_CHANNEL_ID and VOICE_GUILD_ID in .env first.");
@@ -1394,14 +1457,11 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const channel = newState.guild.channels.cache.get(voiceChannel);
   const humans = channel?.members.filter(member => !member.user.bot).size;
   if (humans === undefined) return;
-  const textChannel = state.notificationChannelId
-    ? newState.guild.channels.cache.get(state.notificationChannelId)
-    : newState.guild.systemChannel;
 
   if (humans === 0) {
     if (state.player.state.status === AudioPlayerStatus.Playing && await state.pausePlayback("empty")) {
       state.pausedForEmpty = true;
-      textChannel?.send("Music paused because no one is in the voice channel.").catch(() => {});
+      state.notify?.("Music paused because no one is in the voice channel.");
     }
     state.scheduleEmptyDisconnect();
   } else {
@@ -1410,7 +1470,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const shouldResume = state.pausedForEmpty;
     state.pausedForEmpty = false;
     if (shouldResume && await state.resumePlayback("member joined")) {
-      textChannel?.send("Music resumed because someone joined the voice channel!").catch(() => {});
+      state.notify?.("Music resumed because someone joined the voice channel!");
     }
   }
 });

@@ -54,6 +54,7 @@ function guildMusicClass(overrides = {}) {
   const end = source.indexOf("\nconst client =", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     formatTrackTitle: require("../src/player-panel").formatTrackTitle,
+    PermissionFlagsBits: require("discord.js").PermissionFlagsBits,
     AudioPlayerStatus,
     ...require("../src/playback-errors"),
     ...require("../src/transitions"),
@@ -510,10 +511,11 @@ test("departures pause and schedule leave; returns resume only an empty-channel 
     player: { state: { status: AudioPlayerStatus.Playing } },
     async pausePlayback() { pauses++; this.player.state.status = AudioPlayerStatus.Paused; return true; },
     async resumePlayback() { resumes++; this.player.state.status = AudioPlayerStatus.Playing; return true; },
-    scheduleEmptyDisconnect() { schedules++; this.emptyTimer = setTimeout(() => {}, 10000); }
+    scheduleEmptyDisconnect() { schedules++; this.emptyTimer = setTimeout(() => {}, 10000); },
+    async notify(text) { messages.push(text); }
   };
   const channel = { members: { filter: predicate => ({ size: [{ user: { bot: true } }, ...Array.from({ length: count }, () => ({ user: { bot: false } }))].filter(predicate).length }) } };
-  const guild = { channels: { cache: new Map([["voice", channel]]) }, systemChannel: { send: async text => messages.push(text) } };
+  const guild = { channels: { cache: new Map([["voice", channel]]) } };
   const handler = eventHandler("VoiceStateUpdate", { getMusic: () => state });
   await handler({ channelId: "voice" }, { channelId: null, guild });
   assert.equal(pauses, 1);
@@ -1147,4 +1149,53 @@ test("play errors remain in the private deferred response and never publish a co
     editReply: async value => { privateResponse = value; }, followUp: () => assert.fail("Error must stay private") };
   await handler(interaction);
   assert.ok(!JSON.stringify(privateResponse).includes("PRIVATE_LIBRARY_DETAILS"));
+});
+
+test("music channel follows /join and /play, falls back when unusable, and clears on stop or leave", async () => {
+  const GuildMusic = guildMusicClass();
+  const sent = [];
+  const channels = new Map([
+    ["first", { id: "first", send: async m => { sent.push(["first", m]); } }],
+    ["second", { id: "second", send: async m => { sent.push(["second", m]); } }],
+    ["broken", { id: "broken", send: async () => { throw Object.assign(new Error("Missing Access"), { code: 50001 }); } }]
+  ]);
+  const state = Object.create(GuildMusic.prototype);
+  Object.assign(state, { guild: { id: "guild", channels: { cache: channels, fetch: async id => { throw Object.assign(new Error(`Unknown Channel ${id}`), { code: 10003 }); } } },
+    notificationChannelId: null, lastCommandChannelId: null });
+  assert.equal(state.setMusicChannel({ id: "first" }), true);
+  await state.notify("hello");
+  assert.deepEqual(sent.pop(), ["first", "hello"]);
+  assert.equal(state.setMusicChannel({ id: "second" }), true);
+  assert.equal(state.notificationChannelId, "second");
+  // Saved channel deleted: use the last channel a music command was used in.
+  state.rememberCommandChannel({ id: "first" });
+  channels.delete("second");
+  await state.notify("fallback");
+  assert.deepEqual(sent.pop(), ["first", "fallback"]);
+  // Saved channel rejects sends: fall back without throwing.
+  state.notificationChannelId = "broken";
+  await assert.doesNotReject(state.notify("again"));
+  assert.deepEqual(sent.pop(), ["first", "again"]);
+  // Nothing usable at all: resolves to null instead of crashing.
+  state.notificationChannelId = "gone"; state.lastCommandChannelId = "missing";
+  assert.equal(await state.notify("lost"), null);
+  // Permission check: no SendMessages means skip.
+  channels.set("muted", { id: "muted", send: async () => assert.fail("must not send"), permissionsFor: () => ({ has: () => false }) });
+  state.guild.members = { me: {} };
+  state.notificationChannelId = "muted"; state.lastCommandChannelId = "first";
+  await state.notify("perm");
+  assert.deepEqual(sent.pop(), ["first", "perm"]);
+
+  state.clearMusicChannel();
+  assert.equal(state.notificationChannelId, null);
+  state.notificationChannelId = "first";
+  Object.assign(state, { player: { stop() {} }, queue: [], suggestions: null, cancelActive() {}, invalidateNext() {} });
+  state.stop({ keepMusicChannel: true });
+  assert.equal(state.notificationChannelId, "first", "playback errors keep the channel for their notice");
+  state.stop();
+  assert.equal(state.notificationChannelId, null, "destroying the queue clears the channel");
+  state.notificationChannelId = "first";
+  state.connection = null;
+  state.disconnect();
+  assert.equal(state.notificationChannelId, null, "leaving voice clears the channel");
 });
