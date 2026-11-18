@@ -9,3 +9,9 @@ Run `npm test`, `npm run check`, `node scripts/home-fixes-check.cjs`, `node scri
 Both themes share semantic controls, focus rings, no-flash theme initialization and reduced-motion handling. Public page prefetch is allowlisted; the dashboard and APIs are never prefetched. All pages carry noindex metadata and response headers until explicitly enabled for indexing. The robots file intentionally allows crawling so noindex can be read.
 
 Icons and page-specific Open Graph artwork are generated with `python scripts/generate-site-assets.py` (Pillow), using the existing eight-spoke mark. No image-generation service or external asset dependency is required.
+
+## Changelog
+
+`web/changelog.json` is generated, not edited by hand. On every push to `main`, `.github/workflows/changelog.yml` runs `node scripts/generate-changelog.cjs`, which reads the commits and groups them by day. The commit prefix picks the category: `add:` Added, `improve:` Improved, `fix:` Fixed, `remove:` Removed, `change:` Changed; anything else is Changed. Merges, "update readme" and the workflow's own `chore: update changelog [skip ci]` commits are skipped. Entries without `"auto": true` are hand-written and kept as they are.
+
+The changelog page loads the live file from GitHub (`CHANGELOG_URL`, default `https://raw.githubusercontent.com/deabz/music/main/web/changelog.json`) so it updates without redeploying the bot, and falls back to the bundled `/changelog.json`. Set `CHANGELOG_URL=` (empty) to only use the bundled file.

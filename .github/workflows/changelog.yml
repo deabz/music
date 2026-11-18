@@ -1,0 +1,48 @@
+name: Changelog
+# Regenerates web/changelog.json from the commit history on every push to main.
+# The bot's own commit carries [skip ci], so it never triggers this workflow again
+# (GITHUB_TOKEN pushes also never start new workflow runs).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  changelog:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Regenerate changelog.json
+        run: node scripts/generate-changelog.cjs
+      - name: Commit and push if changed
+        run: |
+          if git diff --quiet -- web/changelog.json; then
+            echo "Changelog already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/changelog.json
+          git commit -m "chore: update changelog [skip ci]"
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            # Someone pushed meanwhile: rebuild on top of the newest main.
+            git fetch origin main
+            git reset --hard origin/main
+            node scripts/generate-changelog.cjs
+            if git diff --quiet -- web/changelog.json; then exit 0; fi
+            git add web/changelog.json
+            git commit -m "chore: update changelog [skip ci]"
+          done
+          exit 1
