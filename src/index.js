@@ -1191,7 +1191,8 @@ const handleCommand = async interaction => {
   const accessError = musicAccessError(interaction, state);
   if (accessError) return reply(interaction, { content: accessError, ephemeral: true });
   state.rememberCommandChannel?.(interaction.channel);
-  const restartCommand = ["bassboost", "eightd", "nightcore", "echo", "forward", "skip"].includes(interaction.commandName);
+  const restartCommand = ["effect", "bassboost", "eightd", "nightcore", "echo", "forward", "skip"].includes(interaction.commandName)
+    && !(interaction.commandName === "effect" && interaction.options.getString("name") === "status");
   if (restartCommand && (state.interactionRestarting || state.restartTransaction || state.skipPromise)) {
     return reply(interaction, { content: "Please wait; a stream restart is in progress.", ephemeral: true });
   }
@@ -1220,6 +1221,23 @@ const handleCommand = async interaction => {
       const enabled = !state.audioFilters.echo;
       await state.setAudioFilter("echo", enabled, content => interaction.followUp({ content, ephemeral: true }));
       return interaction.editReply(`Echo is now ${enabled ? "enabled" : "disabled"}.`);
+    }
+    if (interaction.commandName === "effect") {
+      const name = interaction.options.getString("name", true);
+      const active = () => describeActive(state.audioFilters);
+      if (name === "status") return reply(interaction, { content: `Active effects: ${active()}.`, ephemeral: true });
+      if (name !== "off" && !EFFECT_BY_NAME.has(name)) return reply(interaction, { content: "Unknown effect.", ephemeral: true });
+      await interaction.deferReply();
+      const onFailure = content => interaction.followUp({ content, ephemeral: true });
+      if (name === "off") {
+        await state.setAudioFilters([], onFailure);
+        return interaction.editReply("All effects are off. Audio is back to normal.");
+      }
+      const effect = EFFECT_BY_NAME.get(name);
+      const enabled = !state.audioFilters[name];
+      await state.setAudioFilter(name, enabled, onFailure);
+      const warning = enabled && effect.warning ? `\n\u26a0\ufe0f ${effect.warning}` : "";
+      return interaction.editReply(`${effect.label} is now ${enabled ? "on" : "off"}. Active effects: ${active()}.${warning}`);
     }
     if (interaction.commandName === "play") {
       let memberChannel = await resolveMemberVoiceChannel(interaction);
@@ -1434,7 +1452,7 @@ const handleCommand = async interaction => {
     }
   } catch (error) {
     console.error(`[command:${interaction.commandName}] ${error.stack || error.message}`);
-    const errorMessage = ["bassboost", "eightd", "nightcore", "echo", "forward"].includes(interaction.commandName)
+    const errorMessage = ["effect", "bassboost", "eightd", "nightcore", "echo", "forward"].includes(interaction.commandName)
       ? "The audio change could not be applied. Previous settings were restored if playback could be recovered."
       : "The command could not be completed. Check permissions and input, then try again. Details are in the host logs.";
     if (interaction.deferred) await interaction.editReply(errorMessage).catch(() => {});

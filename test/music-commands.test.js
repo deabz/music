@@ -471,7 +471,7 @@ test("messages only answer mentions, with per-channel cooldown and bot filtering
 
 test("help covers every registered slash command once, within Discord field limits", () => {
   const embed = buildHelpEmbed("all").toJSON();
-  assert.deepEqual(embed.fields.map(field => field.name), ["Playback", "Queue", "Audio effects", "Info"]);
+  assert.deepEqual(embed.fields.map(field => field.name), ["Playback", "Queue", "Audio effects", "Info", "Available effects (stackable)"]);
   for (const command of commands) assert.equal(embed.fields.flatMap(field => [...field.value.matchAll(/`\/([a-z0-9-]+)/g)].map(match => match[1])).filter(name => name === command.name).length, 1, command.name);
   for (const field of embed.fields) assert.ok(field.value.length <= 1024, field.name);
   assert.ok(!embed.description.includes("shortcut"));
@@ -1200,4 +1200,36 @@ test("music channel follows /join and /play, falls back when unusable, and clear
   state.connection = null;
   state.disconnect();
   assert.equal(state.notificationChannelId, null, "leaving voice clears the channel");
+});
+
+test("/play saves its channel and moves the panel there; /effect toggles, stacks, warns and resets", async () => {
+  const calls = [];
+  const filters = {};
+  const state = {
+    audioFilters: filters, panelChannelId: "old", queue: [],
+    rememberCommandChannel(channel) { calls.push(["remember", channel.id]); },
+    setMusicChannel(channel) { calls.push(["music", channel.id]); },
+    add: async () => calls.push(["add"]),
+    panel: { wake() {}, move: async id => calls.push(["move", id]), ensure: async id => calls.push(["ensure", id]) },
+    async setAudioFilter(name, enabled) { filters[name] = enabled; },
+    async setAudioFilters(selected) { for (const key of Object.keys(filters)) filters[key] = selected.includes(key); }
+  };
+  const handler = commandHandler(state, { resolveQuery: async () => [{ title: "Song", duration: 60 }] });
+  const base = { guild: {}, channel: { id: "new" }, user: { id: "user" }, member: { voice: { channel: { id: "voice" } } },
+    deferReply: async () => {}, editReply: async () => {}, followUp: async () => {}, deleteReply: async () => {} };
+  await handler({ ...base, commandName: "play", options: { getString: () => "song" } });
+  assert.deepEqual(calls, [["remember", "new"], ["music", "new"], ["add"], ["move", "new"]]);
+
+  const replies = [];
+  const effect = name => handler({ ...base, commandName: "effect", options: { getString: () => name },
+    editReply: async value => { replies.push(value); }, reply: async value => { replies.push(value.content || value); } });
+  await effect("bassboost"); await effect("eightd");
+  assert.match(replies.at(-1), /8D is now on\. Active effects: Bass boost, 8D\./);
+  await effect("earrape");
+  assert.match(replies.at(-1), /extremely loud/);
+  await effect("status");
+  assert.match(replies.at(-1), /Active effects: Bass boost, Earrape, 8D./);
+  await effect("off");
+  assert.ok(Object.values(filters).every(value => value === false));
+  assert.match(replies.at(-1), /All effects are off/);
 });

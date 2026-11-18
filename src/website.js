@@ -6,7 +6,7 @@ const {commands} = require('./commands');
 const categories = [
  ['playback','Playback',['play','pause','resume','skip','stop','nowplaying','lyrics','forward','join','leave','247']],
  ['queue','Queue',['queue','shuffle','loop','remove','move','clear','search']],
- ['effects','Audio effects',['bassboost','eightd','nightcore','echo']],
+ ['effects','Audio effects',['effect','bassboost','eightd','nightcore','echo']],
  ['settings','Settings',['volume','volup','voldown','set-notification-channel']],
  ['info','Info and utility',[]]
 ];

@@ -10,12 +10,20 @@ const {
 
 const QUEUE_PAGE_SIZE = 10;
 const { formatTrackTitle, short, escapePanelText } = require("./player-panel");
+const { EFFECTS } = require("./audio-effects");
 
 const commands = [
   new SlashCommandBuilder().setName("bassboost").setDescription("Toggle bass boost for the current track."),
   new SlashCommandBuilder().setName("eightd").setDescription("Toggle 8D audio for the current track."),
   new SlashCommandBuilder().setName("nightcore").setDescription("Toggle nightcore mode for the current track."),
   new SlashCommandBuilder().setName("echo").setDescription("Toggle echo for the current track."),
+  new SlashCommandBuilder().setName("effect").setDescription("Toggle an audio effect live, stack several, or turn them all off.")
+    .addStringOption(o => o.setName("name").setDescription("Effect to toggle, off to reset everything, or status").setRequired(true)
+      .addChoices(
+        ...EFFECTS.map(effect => ({ name: `${effect.label} - ${effect.description}`.slice(0, 100), value: effect.name })),
+        { name: "Off - reset all effects", value: "off" },
+        { name: "Status - show active effects", value: "status" }
+      )),
   new SlashCommandBuilder().setName("play").setDescription("Play YouTube searches and YouTube or Spotify tracks, albums, and playlists.")
     .addStringOption(o => o.setName("query").setDescription("YouTube or Spotify link, or search terms").setRequired(true)),
   new SlashCommandBuilder().setName("ping").setDescription("Check the bot's gateway latency."),
@@ -68,7 +76,7 @@ const commands = [
 const helpCategories = [
   { name: "Playback", value: "playback", description: "Play music and manage voice and volume.", commands: ["play", "pause", "resume", "skip", "stop", "nowplaying", "lyrics", "forward", "volume", "volup", "voldown", "join", "leave", "247"] },
   { name: "Queue", value: "queue", description: "Build your shared queue.", commands: ["queue", "shuffle", "loop", "remove", "move", "clear", "search"] },
-  { name: "Audio effects", value: "effects", description: "Shape your sound.", commands: ["bassboost", "eightd", "nightcore", "echo"] },
+  { name: "Audio effects", value: "effects", description: "Shape your sound.", commands: ["effect", "bassboost", "eightd", "nightcore", "echo"] },
   { name: "Info", value: "info", description: "Bot information and notifications.", commands: ["help", "ping", "uptime", "stats", "set-notification-channel"] }
 ];
 
@@ -104,6 +112,11 @@ const buildHelpEmbed = category => {
     }).join("\n"),
     inline: false
   }));
+  if (selectedCategories.some(item => item.value === "effects")) {
+    fields.push({ name: "Available effects (stackable)", inline: false,
+      value: EFFECTS.map(effect => `\`${effect.name}\` ${effect.label}${effect.warning ? " ⚠️" : ""}`).join(" · ")
+        + "\nPick `off` to reset everything. Effects apply live without restarting the song." });
+  }
 
   return new EmbedBuilder()
     .setColor(0x5865F2)

@@ -152,6 +152,7 @@ test("effects menu preselects enabled filters and submits one exact set includin
   const menu = f.calls[0].components[0].components[0];
   assert.equal(f.calls[0].ephemeral, true);
   assert.equal(menu.min_values, 0); assert.equal(menu.max_values, require("../src/audio-effects").EFFECTS.length);
+  assert.ok(menu.options.length <= 25 && menu.options.some(option => option.value === "karaoke"));
   assert.equal(menu.options.find(option => option.value === "echo").default, true);
   const applied = [];
   f.state.setAudioFilters = async values => applied.push(values);
