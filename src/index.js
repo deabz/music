@@ -43,6 +43,7 @@ const { classifyStreamFailure, isExpectedPipeFailure, NATURAL_END_TOLERANCE_SECO
 const { logYtdlpVersion } = require("./ytdlp-tools");
 const { startStartupDiagnostics } = require("./diagnostics");
 const { createAudioPipeline } = require("./audio-pipeline");
+const { EFFECT_NAMES, EFFECT_BY_NAME, emptyFilters, describeActive } = require("./audio-effects");
 const { parseTransitionSettings, shouldFadeIn, TransitionController, NATURAL_HANDOVER_GRACE_MS } = require("./transitions");
 const play = require("play-dl");
 const { musicAccessError, resolveMemberVoiceChannel } = require("./music-permissions");
@@ -212,12 +213,7 @@ class GuildMusic {
     this.panelSuggestions = null;
     this.playing = false;
     this.totalTracksPlayed = 0;
-    this.audioFilters = {
-      bassboost: false,
-      eightd: false,
-      nightcore: false,
-      echo: false
-    };
+    this.audioFilters = emptyFilters();
     this.player.on(AudioPlayerStatus.Idle, previous => this.onTrackEnd(previous?.resource));
     this.player.on("stateChange", (_, next) => {
       if (next.resource && next.resource !== this.resource) return;
@@ -247,7 +243,7 @@ class GuildMusic {
   }
 
   async setAudioFilters(selected, onFailure) {
-    const names = ["bassboost", "eightd", "nightcore", "echo"];
+    const names = EFFECT_NAMES;
     if (!Array.isArray(selected) || selected.some(name => !names.includes(name))) throw new Error("Invalid effects selection.");
     const filters = Object.fromEntries(names.map(name => [name, selected.includes(name)]));
     if (names.every(name => Boolean(this.audioFilters[name]) === filters[name])) return;

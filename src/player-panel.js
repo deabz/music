@@ -1,4 +1,5 @@
 
+const { EFFECTS } = require("./audio-effects");
 const PANEL_PREFIX = "panel:";
 const PANEL_REPOST_ON_TRACK_CHANGE = true;
 const PANEL_REPOST_DELAY_MS = 1500;
@@ -269,9 +270,9 @@ function createPlayerPanel(state, onIdentity) {
 }
 function buildEffectsMenu(state, userId) {
   return [{ type: 1, components: [{ type: 3, custom_id: `panel:effects-apply:${userId}`,
-    placeholder: "Choose audio effects", min_values: 0, max_values: 4,
-    options: [["bassboost", "Bass boost"], ["eightd", "8D"], ["nightcore", "Nightcore"], ["echo", "Echo"]]
-      .map(([value, label]) => ({ label, value, default: Boolean(state.audioFilters?.[value]) })) }] }];
+    placeholder: "Choose audio effects (stackable, none = off)", min_values: 0, max_values: EFFECTS.length,
+    options: EFFECTS.map(({ name, label, description }) => ({ label, value: name, description,
+      default: Boolean(state.audioFilters?.[name]) })) }] }];
 }
 function buildFavouritesMenu(tracks, userId) {
   return [{ type: 1, components: [{ type: 3, custom_id: `panel:favourites-select:${userId}`,

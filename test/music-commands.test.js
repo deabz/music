@@ -32,6 +32,7 @@ function commandHandler(state, overrides = {}) {
   const end = source.indexOf("\nclient.on(Events.VoiceStateUpdate", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nhandleCommand;`, {
     ...require("../src/player-panel"),
+    ...require("../src/audio-effects"),
     buildPlayConfirmation: require("../src/player-panel").buildPlayConfirmation,
     lyrics: { open: interaction => interaction.reply({ content: "Mock lyrics" }) },
     startupComplete: true, shuttingDown: false,
@@ -54,6 +55,7 @@ function guildMusicClass(overrides = {}) {
   const end = source.indexOf("\nconst client =", start);
   return vm.runInNewContext(`${source.slice(start, end)}\nGuildMusic;`, {
     formatTrackTitle: require("../src/player-panel").formatTrackTitle,
+    ...require("../src/audio-effects"),
     PermissionFlagsBits: require("discord.js").PermissionFlagsBits,
     AudioPlayerStatus,
     ...require("../src/playback-errors"),

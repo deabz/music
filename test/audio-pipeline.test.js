@@ -45,7 +45,7 @@ test("shared pipeline buffers with backpressure and preserves effect/seek option
   assert.ok(calls[0].args.includes("bestaudio[ext=webm][acodec=opus]/bestaudio"));
   assert.ok(!calls[0].args.includes("--download-sections"));
   assert.ok(calls[1].args.some(value => value.includes("atrim=start=12,asetpts=PTS-STARTPTS")));
-  assert.ok(calls[1].args.some(value => value.includes("aecho=0.8:0.88:60:0.4")));
+  assert.ok(calls[1].args.some(value => value.includes(require("../src/audio-effects").EFFECT_BY_NAME.get("echo").filter)));
   assert.equal(job.inputType, "raw");
   assert.equal(job.stream.readableHighWaterMark, PREFETCH_BYTES);
   calls[1].child.stdout.write(Buffer.alloc(PREFETCH_BYTES * 2));
@@ -150,7 +150,9 @@ test("fallback keeps seeking/effects and cancelled probes never create an orphan
   const job = createAudioPipeline({ url: "test" }, { bassboost: true }, 30, fixture.spawn, "arbitrary");
   await job.ready;
   assert.ok(!fixture.calls[0].args.includes("--download-sections"));
-  assert.ok(fixture.calls[1].args.includes("atrim=start=30,asetpts=PTS-STARTPTS,bass=g=10"));
+  const filter = fixture.calls[1].args[fixture.calls[1].args.indexOf("-af") + 1];
+  assert.ok(filter.startsWith("atrim=start=30,asetpts=PTS-STARTPTS,"));
+  assert.ok(filter.includes("bass=g=14") && filter.endsWith(require("../src/audio-effects").LIMITER));
   job.cancel();
   const late = launcher();
   let release;
@@ -187,7 +189,7 @@ test("probe prefix and subsequent chunks pass to effects FFmpeg exactly once in 
 });
 
 test("all effect sets and seek positions use stable source-time trimming before speed filters", async () => {
-  for (const offset of [0, 60]) for (const selected of [[], ["bassboost"], ["eightd"], ["nightcore"], ["echo"], ["bassboost", "eightd", "nightcore", "echo"]]) {
+  for (const offset of [0, 60]) for (const selected of [[], ["bassboost"], ["eightd"], ["nightcore"], ["echo"], ["bassboost", "eightd", "nightcore", "echo"], require("../src/audio-effects").EFFECT_NAMES]) {
     const fixture = launcher();
     const filters = Object.fromEntries(selected.map(name => [name, true]));
     const job = createAudioPipeline({ title: "$ & [quotes]", url: "synthetic" }, filters, offset, fixture.spawn);
@@ -198,7 +200,7 @@ test("all effect sets and seek positions use stable source-time trimming before 
     if (offset || selected.length) {
       assert.equal(job.inputType, "raw"); const filter = fixture.calls[1].args[fixture.calls[1].args.indexOf("-af") + 1];
       if (offset) assert.ok(filter.startsWith("atrim=start=60,asetpts=PTS-STARTPTS"));
-      if (selected.includes("nightcore")) assert.ok(filter.includes("aresample=48000,asetrate=44100*1.2,atempo=1.2"));
+      if (selected.includes("nightcore")) { assert.ok(filter.includes("asetrate=48000*1.25,aresample=48000")); assert.equal(job.rate, require("../src/audio-effects").effectsRate(filters)); }
       assert.ok(!fixture.calls[1].args.includes("-ss"));
     } else assert.equal(job.inputType, "webm/opus");
     job.cancel();

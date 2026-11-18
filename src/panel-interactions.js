@@ -1,5 +1,6 @@
 const { musicAccessError } = require("./music-permissions");
 const { playbackPosition } = require("./playback-position");
+const { EFFECTS, describeActive } = require("./audio-effects");
 const { PANEL_PREFIX, buildEffectsMenu, buildFavouritesMenu, formatTrackTitle } = require("./player-panel");
 
 const ACTION_PERMISSIONS = {
@@ -93,9 +94,9 @@ function createPanelInteractionHandler({ getMusic, isReady = () => true, favouri
         } catch (error) { state.suggestions.restore(selected); throw error; }
       } else if (action === "effects-apply") {
         await state.setAudioFilters(interaction.values, content => interaction.followUp({ content, ephemeral: true }));
-        const labels = { bassboost: "Bass boost", eightd: "8D", nightcore: "Nightcore", echo: "Echo" };
-        const enabled = Object.entries(state.audioFilters || {}).filter(([, value]) => value).map(([name]) => labels[name]);
-        await interaction.editReply({ content: `Audio effects updated. Enabled: ${enabled.join(", ") || "none"}.`, components: [] });
+        const warnings = EFFECTS.filter(effect => effect.warning && state.audioFilters?.[effect.name]).map(effect => `
+⚠️ ${effect.warning}`).join("");
+        await interaction.editReply({ content: `Audio effects updated. Enabled: ${describeActive(state.audioFilters)}.${warnings}`, components: [] });
       } else if (action === "play") {
         if (!await state.resumePlayback("panel")) await interaction.followUp({ content: "Playback is not paused.", ephemeral: true });
       } else if (action === "pause") {

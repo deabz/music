@@ -4,6 +4,7 @@ const { demuxProbe, StreamType } = require("@discordjs/voice");
 const ytdlp = require("youtube-dl-exec");
 const ffmpeg = require("ffmpeg-static");
 const { youtubeCookieOptions, youtubeRuntimeOptions } = require("./music-utils");
+const { effectChain, effectsRate } = require("./audio-effects");
 
 // Backpressure bounds the unread output; child pipes have small additional buffers.
 const PREFETCH_BYTES = 2 * 1024 * 1024;
@@ -29,7 +30,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       job.audioStarted = true; clearTimeout(job.startupTimer); job.resolveAudioReady?.(); callback(null, chunk);
     } });
   const job = { stream, stderr: "", filterStderr: "", cancelled: false, intentionallyAborted: false, error: null, downloadDone: false, outputDone: false,
-    inputType: null, formatReady: false, rate: filters.nightcore ? 1.323 : 1, children: [],
+    inputType: null, formatReady: false, rate: effectsRate(filters), children: [],
     filters: { ...filters }, offset, exits: {}, commands: [], diagnosticSecrets: [], generationId: ++pipelineSequence, stage: "extract" };
   job.ready = new Promise(resolve => { job.resolveReady = resolve; });
   job.audioReady = new Promise(resolve => { job.resolveAudioReady = resolve; });
@@ -125,10 +126,7 @@ function createAudioPipeline(track, filters = {}, offset = 0, launch = spawn, pr
       // yt-dlp download-sections to stdout can exit 0 after a truncated range.
       // Decode the original stream and trim source time before speed/effect filters.
       if (offset > 0) effects.push(`atrim=start=${Number(offset)},asetpts=PTS-STARTPTS`);
-      if (filters.bassboost) effects.push("bass=g=10");
-      if (filters.eightd) effects.push("apulsator=hz=0.1");
-      if (filters.nightcore) effects.push("aresample=48000,asetrate=44100*1.2,atempo=1.2");
-      if (filters.echo) effects.push("aecho=0.8:0.88:60:0.4");
+      effects.push(...effectChain(filters));
       if (effects.length || type !== StreamType.WebmOpus) {
         job.stage = "ffmpeg";
         const args = ["-hide_banner", "-nostdin", "-loglevel", "error", "-i", "pipe:0",
