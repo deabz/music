@@ -28,7 +28,11 @@ async function audio(filters, offset) {
     if (offset || Object.values(filters).some(Boolean)) {
       assert.equal(job.inputType, "raw");
       const seconds = bytes / 192000;
-      assert.ok(seconds > 0.5 && seconds < 1.2, "PCM duration must match source position and speed");
+      // One source second, scaled by speed effects; echo-style effects add up to ~0.6 s of tail at EOF.
+      const { effectsRate, activeEffects } = require("../src/audio-effects");
+      const expected = 1 / effectsRate(filters);
+      const tail = activeEffects(filters).some(effect => effect.stage === "space" || effect.stage === "mod" || effect.name === "vaporwave") ? 0.7 : 0;
+      assert.ok(seconds > expected * 0.6 && seconds < expected * 1.2 + tail, `PCM duration ${seconds}s must match source position and speed`);
     } else assert.equal(job.inputType, "webm/opus");
     console.log(`[runtime] audio=${Object.keys(filters).join("+") || "off"} offset=${offset} bytes=${bytes} OK`);
   } finally { clearTimeout(timeout); job.cancel(); await job.termination; }
@@ -49,6 +53,9 @@ async function main() {
   console.log("[runtime] command definitions, yt-dlp, ffmpeg, Opus, encryption and DAVE OK");
   for (const filters of [{}, { bassboost: true }, { eightd: true }, { nightcore: true }, { echo: true }, { bassboost: true, eightd: true, nightcore: true, echo: true }]) await audio(filters, 0);
   await audio({}, 60); await audio({ bassboost: true, eightd: true, nightcore: true, echo: true }, 60);
+  const { EFFECT_NAMES } = require("../src/audio-effects");
+  for (const name of EFFECT_NAMES) await audio({ [name]: true }, 0);
+  await audio(Object.fromEntries(EFFECT_NAMES.map(name => [name, true])), 60);
 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "nyx-runtime-"));
   let server;
